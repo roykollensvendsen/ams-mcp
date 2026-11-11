@@ -130,6 +130,11 @@ class AmsService:
     def _local(self, timestamp: float) -> dt.datetime:
         return dt.datetime.fromtimestamp(timestamp, self._tz)
 
+    def _later(self, moment: dt.datetime, hours: int) -> dt.datetime:
+        """The local time this many real hours on, the clock changes counted."""
+        # RULE: hours are counted in real hours, not on the clock
+        return (moment.astimezone(dt.UTC) + dt.timedelta(hours=hours)).astimezone(self._tz)
+
     # The answers themselves
 
     async def _now(self) -> tuple[dict[str, Any], list[Page]]:
@@ -202,12 +207,12 @@ class AmsService:
         start = self._local(page.read_at).replace(minute=0, second=0, microsecond=0)
 
         def at(offset: int) -> dict[str, Any]:
-            hour = start + dt.timedelta(hours=offset)
+            hour = self._later(start, offset)
             return {"hour": hour.strftime("%H:%M"), "price": found.by_hour[offset]}
 
         known = [o for o, v in enumerate(found.by_hour) if v is not None]
         upcoming = [at(o) for o in known if 0 < o <= NEXT_HOURS]
-        today = [o for o in known if (start + dt.timedelta(hours=o)).date() == start.date()]
+        today = [o for o in known if self._later(start, o).date() == start.date()]
         cheapest = [at(o) for o in sorted(today, key=lambda o: (found.by_hour[o], o))[:SPOKEN_HOURS]]
         words = [f"{say.rounded(found.by_hour[0], 2)} {kr} per kWh now."]
         if upcoming:
@@ -274,7 +279,7 @@ class AmsService:
         # The plot keeps the last 24 full hours, each in the slot of the UTC hour it began.
         hours = []
         for back in range(24, 0, -1):
-            start = top - dt.timedelta(hours=back)
+            start = self._later(top, -back)
             slot = start.astimezone(dt.UTC).hour
             hours.append((start, by_utc.import_kwh[slot], by_utc.export_kwh[slot]))
         today = [h for h in hours if h[0].date() == top.date()]
