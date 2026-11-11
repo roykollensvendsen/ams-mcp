@@ -1,0 +1,75 @@
+{
+ "version": "v2.4.11",
+ "chip": "esp32s2",
+ "chipId": "000000000000",
+ "cpu": 160,
+ "mac": "00:00:5E:00:53:01",
+ "apmac": "00:00:5E:00:53:02",
+ "board": 7,
+ "vndcfg": true,
+ "usrcfg": true,
+ "fwconsent": 2,
+ "hostname": "ams-reader",
+ "booting": false,
+ "upgrading": false,
+ "net": {
+  "ip": "192.0.2.10",
+  "mask": "255.255.255.0",
+  "gw": "192.0.2.1",
+  "dns1": "192.0.2.1",
+  "dns2": "",
+  "ipv6": "",
+  "dns1v6": "",
+  "dns2v6": ""
+ },
+ "if": {
+  "eth": false
+ },
+ "meter": {
+  "mfg": 3,
+  "model": "EXAMPLE-MODEL",
+  "id": "0000000000000000"
+ },
+ "ui": {
+  "i": 1,
+  "e": 2,
+  "v": 2,
+  "a": 2,
+  "r": 0,
+  "c": 1,
+  "t": 2,
+  "p": 2,
+  "d": 1,
+  "m": 1,
+  "s": 2,
+  "l": 2,
+  "h": 2,
+  "f": 2,
+  "k": 1,
+  "lang": "nn"
+ },
+ "security": 0,
+ "context": "",
+ "boot_reason": 1,
+ "ex_cause": 0,
+ "upgrade": {
+  "e": 0,
+  "f": "",
+  "t": "",
+  "n": "v2.5.1",
+  "p": -1.0
+ },
+ "last_month": {
+  "u": 1561.95,
+  "c": 1254.87,
+  "p": 0.0,
+  "i": 0.0
+ },
+ "clock_offset": 1,
+ "features": [
+  "rdebug",
+  "kmp",
+  "cloud",
+  "zc"
+ ]
+}
