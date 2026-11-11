@@ -12,10 +12,11 @@ import datetime as dt
 import itertools
 import zoneinfo
 
+import httpx
 import pytest
 
 from ams_mcp import service
-from ams_mcp.reader import Page, ReaderError
+from ams_mcp.reader import HttpReader, Page, ReaderError
 from ams_mcp.service import AmsService
 from ams_mcp.simulator import recorded
 
@@ -298,3 +299,27 @@ def test_the_day_plot_on_a_clock_change_reads_each_utc_hour_once(day):
     utc_hours = [s.astimezone(dt.UTC).hour for s in starts]
     assert sorted(utc_hours) == list(range(24))
     assert all((b - a_).total_seconds() == 3600 for a_, b in itertools.pairwise(starts))
+
+
+class Answering:
+    """A real reader object over a pretend network that answers every page the same way."""
+
+    def __init__(self, response):
+        self.reader = HttpReader("reader.example", transport=httpx.MockTransport(lambda request: response))
+
+    async def page(self, name):
+        return await self.reader.page(name)
+
+
+def test_a_reader_that_answers_wrongly_is_not_blamed_on_its_power_or_wifi():
+    for response in (httpx.Response(404), httpx.Response(200, text="<html></html>"), httpx.Response(302)):
+        a = _ask("now", Answering(response))
+        assert a["success"] is False
+        assert "power" not in a["say"], a["say"]
+        assert a["say"] == service.UNKNOWN.format(where="reader.example")
+
+
+def test_a_reader_that_asks_for_a_login_says_how_to_let_the_plugin_read():
+    a = _ask("now", Answering(httpx.Response(401)))
+    assert a["say"] == service.LOGIN.format(where="reader.example")
+    assert "Open http://reader.example/configuration" in a["say"]

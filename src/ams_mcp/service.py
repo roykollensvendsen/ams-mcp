@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from ams_mcp import pages, say
 from ams_mcp.pages import FIRMWARE, PageError
-from ams_mcp.reader import ReaderError
+from ams_mcp.reader import ReaderError, StrangeAnswerError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -37,6 +37,10 @@ UNREACHABLE = (
 UNKNOWN = (
     "The meter reader at {where} answered in a shape this plugin doesn't know; it was written for firmware "
     f"{FIRMWARE}. Open http://{{where}}/status and check the reader's firmware version."
+)
+LOGIN = (
+    "The meter reader at {where} asks for a login, and this plugin never sends one. "
+    "Open http://{where}/configuration and let the data pages be read without a login."
 )
 NO_PRICES = (
     "The meter reader at {where} has no prices just now. "
@@ -93,6 +97,9 @@ class AmsService:
     ) -> dict[str, Any]:
         try:
             answer, read = await work()
+        except StrangeAnswerError as error:
+            # RULE: a reader that answers wrongly is not blamed on its power or wifi
+            return {"success": False, "say": (LOGIN if error.login else UNKNOWN).format(where=self._where)}
         except ReaderError:
             # RULE: a reader that does not answer is said, and nothing is guessed
             return {"success": False, "say": UNREACHABLE.format(where=self._where)}
