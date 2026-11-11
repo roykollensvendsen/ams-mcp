@@ -53,6 +53,16 @@ def test_every_tool_opens_with_a_whole_sentence_the_voice_sees_in_full():
         assert openings.setdefault(start, name) == name, f"{name} and {openings[start]} open alike"
 
 
+#: The first word of each opening: a verb, or a question word, so it reads as a sentence.
+OPENING_VERBS = {"How", "Tells", "Gives", "Shows", "Sums"}
+
+
+def test_every_tool_opens_with_a_sentence_not_a_phrase():
+    for name, tool in _tools(_server()).items():
+        first = (tool.description or "").split()[0]
+        assert first in OPENING_VERBS, f"{name} opens with {first!r}"
+
+
 def test_every_simulated_answer_says_simulated_first():
     srv = _server()
     for tool in TOOLS:

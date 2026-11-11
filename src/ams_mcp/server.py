@@ -83,7 +83,7 @@ def build_server(service: AmsService, *, simulated: bool = False) -> MCPServer[A
 
     @guarded.tool(
         description=(
-            "Power used right now.\nkW drawn from or sent to the grid, each phase's volts and amps, "
+            "How much power is used?\nkW drawn from or sent to the grid, each phase's volts and amps, "
             "and the power factor when the meter sends one."
         )
     )
@@ -92,7 +92,7 @@ def build_server(service: AmsService, *, simulated: bool = False) -> MCPServer[A
 
     @guarded.tool(
         description=(
-            "Energy used so far.\nkWh in and out, and what it cost, this hour, today and this month."
+            "Tells the energy used.\nkWh in and out, and what it cost, this hour, today and this month."
         )
     )
     async def ams_energy() -> dict[str, Any]:
@@ -100,7 +100,7 @@ def build_server(service: AmsService, *, simulated: bool = False) -> MCPServer[A
 
     @guarded.tool(
         description=(
-            "Electricity price by hour.\nThe price now in kr per kWh, the next hours, and the cheapest "
+            "Gives the price by hour.\nThe price now in kr per kWh, the next hours, and the cheapest "
             "hours left today."
         )
     )
@@ -109,7 +109,7 @@ def build_server(service: AmsService, *, simulated: bool = False) -> MCPServer[A
 
     @guarded.tool(
         description=(
-            "Capacity step this month.\nThe grid's capacity step, the month's top three hours, and how "
+            "Shows the capacity step.\nThe grid's capacity step, the month's top three hours, and how "
             "much this hour could use before the step goes up."
         )
     )
@@ -118,7 +118,7 @@ def build_server(service: AmsService, *, simulated: bool = False) -> MCPServer[A
 
     @guarded.tool(
         description=(
-            "A day or month in short.\nPeriod 'day' (the default): today so far and its busiest hour. "
+            "Sums up a day or month.\nPeriod 'day' (the default): today so far and its busiest hour. "
             "'month': this month so far, its busiest day, and last month."
         )
     )
