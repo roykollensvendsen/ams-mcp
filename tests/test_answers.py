@@ -150,7 +150,7 @@ def test_capacity_says_the_step_the_top_hours_and_how_far_this_hour_is_from_the_
     assert a["say"] == (
         "Capacity step 5 to 10 kW. Your top three hours average 5.25 kW: "
         "5.88 on the 9th, 4.96 on the 6th and 4.92 on the 7th. "
-        "This hour has used 0.32 kWh, and at this rate ends near 1.18. "
+        "This hour has used 0.32 kWh, and at this rate ends near 1.18 kWh. "
         "It would take over 19.2 kWh this hour to reach the next step."
     )
     assert a["step"] == {"from_kw": 5, "to_kw": 10}
