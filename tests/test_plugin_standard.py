@@ -20,6 +20,7 @@ STANDARD = {
     3: [
         "test_server.py::test_a_tools_longest_wait_fits_in_the_voices_time",
         "test_server.py::test_a_tool_still_working_at_the_deadline_says_so",
+        "test_server.py::test_a_reader_that_hangs_gets_the_error_and_its_next_step_inside_the_budget",
         "test_cold_start.py::test_a_cold_start_lists_the_tools_in_time",
         "test_cold_start.py::test_a_cold_start_never_waits_on_the_reader",
     ],

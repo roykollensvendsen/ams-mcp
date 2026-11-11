@@ -96,5 +96,5 @@ replace = 'if False:'
 [[rule]]
 name = "a page is asked for at most twice"
 file = "src/ams_mcp/reader.py"
-find = 'running\.add\(asyncio\.ensure_future\(self\._once\(name\)\)\)'
-replace = 'running |= {asyncio.ensure_future(self._once(name)), asyncio.ensure_future(self._once(name))}'
+find = 'for attempt in range\(TRIES\):'
+replace = 'for attempt in range(TRIES + 1):'

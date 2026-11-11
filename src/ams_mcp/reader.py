@@ -29,15 +29,17 @@ PAGES = (
     "temperature.json",
     "sysinfo.json",
 )
-#: Seconds one page may take, connecting and reading together; a tool reads its pages
-#: side by side. The reader answers in well under a second, but once took 5.7 s waking its
-#: Wi-Fi (2026-11-11). This leaves room for that inside the server's 12 s for an answer.
-TIMEOUT = 9.0
-#: Seconds before a page not yet answered is asked for once more, on a new connection.
-#: The reader drops a packet now and then, and TCP waits 1, 3, then 7 s before trying
-#: again; a fresh connection is usually answered at once. A GET changes nothing, so
-#: asking twice is safe, and the first answer wins.
-HEDGE_AFTER = 3.0
+#: Seconds one page may take in all, both tries together. The reader answers in well under
+#: a second, but after a few idle seconds it can take five to eight while it wakes its Wi-Fi
+#: (2026-11-11). Every tool stays inside server.ANSWER_WITHIN, which is inside the voice's 15.
+TIMEOUT = 11.0
+#: Seconds the first try may take before the page is asked for once more, on a new
+#: connection, with what is left of TIMEOUT. A lost packet costs TCP 1, 3, then 7 s before
+#: it tries again; a fresh connection is usually answered at once. A GET changes nothing,
+#: so asking twice is safe.
+FIRST_TRY = 6.0
+#: How many times a page is asked for, at most.
+TRIES = 2
 #: Seconds a page is reused before it is read again, so a burst of questions is one read.
 CACHE_FOR = 3.0
 
@@ -97,8 +99,7 @@ class HttpReader:
 
     async def _get(self, name: str) -> dict[str, Any]:
         try:
-            async with asyncio.timeout(TIMEOUT):
-                response = await self._first_of_two(name)
+            response = await self._read(name)
         except (httpx.HTTPError, TimeoutError) as error:
             msg = f"the reader did not answer: {type(error).__name__}"
             raise ReaderError(msg) from error
@@ -115,28 +116,19 @@ class HttpReader:
             raise ReaderError(msg)
         return body
 
-    async def _first_of_two(self, name: str) -> httpx.Response:
-        """The page, asked for once more when the first try fails or hangs; the first answer wins."""
-        first = asyncio.ensure_future(self._once(name))
-        running = {first}
-        try:
-            done, _ = await asyncio.wait(running, timeout=HEDGE_AFTER)
-            if first in done and first.exception() is None:
-                return first.result()
-            # RULE: a page is asked for at most twice
-            running.add(asyncio.ensure_future(self._once(name)))
-            running -= done
-            failure: BaseException | None = first.exception() if first in done else None
-            while running:
-                done, running = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
-                for task in done:
-                    if task.exception() is None:
-                        return task.result()
-                    failure = task.exception()
-            raise failure or ReaderError(name)
-        finally:
-            for task in running:
-                task.cancel()
+    async def _read(self, name: str) -> httpx.Response:
+        """The page, asked for once more if the first try fails or hangs, all within TIMEOUT."""
+        now = asyncio.get_running_loop().time()
+        deadline, failure = now + TIMEOUT, None
+        # RULE: a page is asked for at most twice
+        for attempt in range(TRIES):
+            limit = deadline if attempt else min(deadline, now + FIRST_TRY)
+            try:
+                async with asyncio.timeout_at(limit):
+                    return await self._once(name)
+            except (httpx.HTTPError, TimeoutError) as error:
+                failure = error
+        raise failure or TimeoutError
 
     async def _once(self, name: str) -> httpx.Response:
         async with httpx.AsyncClient(

@@ -3,9 +3,12 @@
 
 import asyncio
 import re
+import time
 import zoneinfo
 
-from ams_mcp import reader, server
+import httpx
+
+from ams_mcp import reader, server, service
 from ams_mcp.server import build_server
 from ams_mcp.service import AmsService
 from ams_mcp.simulator import SimulatedReader
@@ -102,5 +105,23 @@ def test_a_tool_still_working_at_the_deadline_says_so(monkeypatch):
 
 def test_a_tools_longest_wait_fits_in_the_voices_time():
     # A tool reads its pages side by side, so its longest wait is one page's
-    # timeout; the guard cuts it off at ANSWER_WITHIN in any case.
-    assert reader.TIMEOUT < server.ANSWER_WITHIN < VOICE_LIMIT - 2.0
+    # two tries, which share TIMEOUT; the guard cuts any tool off at ANSWER_WITHIN.
+    assert reader.FIRST_TRY < reader.TIMEOUT < server.ANSWER_WITHIN <= 12.0
+    assert server.ANSWER_WITHIN + 2.0 < VOICE_LIMIT  # room for the bridge and the network
+
+
+def test_a_reader_that_hangs_gets_the_error_and_its_next_step_inside_the_budget(monkeypatch):
+    # The same path as the real thing, with every limit scaled down a hundredfold.
+    monkeypatch.setattr(reader, "TIMEOUT", reader.TIMEOUT / 100)
+    monkeypatch.setattr(reader, "FIRST_TRY", reader.FIRST_TRY / 100)
+    monkeypatch.setattr(server, "ANSWER_WITHIN", server.ANSWER_WITHIN / 100)
+
+    async def hang(request):
+        await asyncio.sleep(5)
+
+    source = reader.HttpReader("reader.example", transport=httpx.MockTransport(hang))
+    srv = build_server(AmsService(source, timezone=OSLO, where="reader.example"))
+    started = time.monotonic()
+    answer = _call(srv, "ams_now")
+    assert time.monotonic() - started < server.ANSWER_WITHIN
+    assert answer["say"] == service.UNREACHABLE.format(where="reader.example")
