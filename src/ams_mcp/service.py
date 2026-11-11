@@ -359,7 +359,9 @@ def _capacity_words(
     count = {1: "top hour", 2: "top two hours", 3: "top three hours"}.get(len(peaks), "top hours")
     if peaks:
         words.append(f"Your {count} average {say.rounded(tariff.month_max_kwh, 2)} kW: {say.listing(peaks)}.")
-    words.append(f"This hour has used {say.kwh(used)} kWh, and at this rate ends near {say.kwh(projected)}.")
+    words.append(
+        f"This hour has used {say.kwh(used)} kWh, and at this rate ends near {say.kwh(projected)} kWh."
+    )
     if needed is not None:
         words.append(f"It would take over {say.kwh(needed)} kWh this hour to reach the next step.")
     return words
