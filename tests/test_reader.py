@@ -159,10 +159,10 @@ def _counted(*behaviours):
     return handler, calls
 
 
-def test_a_read_that_hangs_is_asked_once_more_and_the_first_answer_wins(monkeypatch):
+def test_a_read_that_hangs_is_asked_once_more_with_the_time_left(monkeypatch):
     # A lost packet costs TCP a second, then three, then seven before it tries
     # again; a fresh connection is usually answered at once.
-    monkeypatch.setattr(reader, "HEDGE_AFTER", 0.05)
+    monkeypatch.setattr(reader, "FIRST_TRY", 0.05)
     handler, calls = _counted(5.0, 0.0)
     started = time.monotonic()
     page = asyncio.run(_reader(handler).page("data.json"))
@@ -172,14 +172,14 @@ def test_a_read_that_hangs_is_asked_once_more_and_the_first_answer_wins(monkeypa
 
 
 def test_a_read_that_fails_at_once_is_asked_once_more(monkeypatch):
-    monkeypatch.setattr(reader, "HEDGE_AFTER", 5.0)
+    monkeypatch.setattr(reader, "FIRST_TRY", 5.0)
     handler, calls = _counted(httpx.ConnectError("refused"), 0.0)
     assert asyncio.run(_reader(handler).page("data.json")).body == {"n": 2}
     assert len(calls) == 2
 
 
 def test_a_page_is_asked_for_at_most_twice(monkeypatch):
-    monkeypatch.setattr(reader, "HEDGE_AFTER", 0.01)
+    monkeypatch.setattr(reader, "FIRST_TRY", 0.01)
     handler, calls = _counted(httpx.ConnectError("refused"))
     with pytest.raises(reader.ReaderError):
         asyncio.run(_reader(handler).page("data.json"))
@@ -190,3 +190,14 @@ def test_a_quick_answer_is_asked_for_once():
     handler, calls = _counted(0.0)
     asyncio.run(_reader(handler).page("data.json"))
     assert len(calls) == 1
+
+
+def test_both_tries_together_stay_inside_one_time_limit(monkeypatch):
+    monkeypatch.setattr(reader, "TIMEOUT", 0.3)
+    monkeypatch.setattr(reader, "FIRST_TRY", 0.2)
+    handler, calls = _counted(5.0)
+    started = time.monotonic()
+    with pytest.raises(reader.ReaderError):
+        asyncio.run(_reader(handler).page("data.json"))
+    assert time.monotonic() - started < 0.5
+    assert len(calls) == 2
