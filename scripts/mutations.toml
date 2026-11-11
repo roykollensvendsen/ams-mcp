@@ -98,3 +98,39 @@ name = "a page is asked for at most twice"
 file = "src/ams_mcp/reader.py"
 find = 'for attempt in range\(TRIES\):'
 replace = 'for attempt in range(TRIES + 1):'
+
+[[rule]]
+name = "a subject in the past tense is refused"
+file = "scripts/imperative.py"
+find = '\(word.endswith\("ed"\), "is a past tense"\)'
+replace = '(False, "is a past tense"),'
+
+[[rule]]
+name = "a subject that opens a noun phrase is refused"
+file = "scripts/imperative.py"
+find = '\(word in NOT_A_VERB'
+replace = '(False, "opens a phrase rather than an instruction"),'
+
+[[rule]]
+name = "a file changed during the run is never restored over"
+file = "scripts/mutate.py"
+find = 'if path\.read_text\(\) != mutated:'
+replace = 'if False:'
+
+[[rule]]
+name = "a coloured failure line is still attributed"
+file = "scripts/mutate.py"
+find = '^\s*plain = ANSI\.sub\("", r\.stdout\)$'
+replace = 'plain = r.stdout'
+
+[[rule]]
+name = "two mutations never share a bytecode cache"
+file = "scripts/mutate.py"
+find = '^\s*env = \{\*\*os\.environ, "PYTHONDONTWRITEBYTECODE": "1"\}$'
+replace = 'env = {**os.environ}'
+
+[[rule]]
+name = "an empty rule table is not a crash"
+file = "scripts/mutate.py"
+find = '^\s*rules = tomllib\.loads\(TABLE\.read_text\(\)\)\.get\("rule", \[\]\)$'
+replace = 'rules = tomllib.loads(TABLE.read_text())["rule"]'
