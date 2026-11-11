@@ -8,6 +8,7 @@ here: the only method this module sends is GET, and only to the pages in PAGES.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import dataclass
@@ -28,8 +29,15 @@ PAGES = (
     "temperature.json",
     "sysinfo.json",
 )
-#: Seconds to wait for one page; a tool reads its pages side by side.
-TIMEOUT = 5.0
+#: Seconds one page may take, connecting and reading together; a tool reads its pages
+#: side by side. The reader answers in well under a second, but once took 5.7 s waking its
+#: Wi-Fi (2026-11-11). This leaves room for that inside the server's 12 s for an answer.
+TIMEOUT = 9.0
+#: Seconds before a page not yet answered is asked for once more, on a new connection.
+#: The reader drops a packet now and then, and TCP waits 1, 3, then 7 s before trying
+#: again; a fresh connection is usually answered at once. A GET changes nothing, so
+#: asking twice is safe, and the first answer wins.
+HEDGE_AFTER = 3.0
 #: Seconds a page is reused before it is read again, so a burst of questions is one read.
 CACHE_FOR = 3.0
 
@@ -89,12 +97,9 @@ class HttpReader:
 
     async def _get(self, name: str) -> dict[str, Any]:
         try:
-            async with httpx.AsyncClient(
-                transport=self._transport, timeout=TIMEOUT, follow_redirects=False
-            ) as client:
-                # RULE: a page is only ever read with get
-                response = await client.get(f"{self._base}/{name}")
-        except httpx.HTTPError as error:
+            async with asyncio.timeout(TIMEOUT):
+                response = await self._first_of_two(name)
+        except (httpx.HTTPError, TimeoutError) as error:
             msg = f"the reader did not answer: {type(error).__name__}"
             raise ReaderError(msg) from error
         if response.status_code != httpx.codes.OK:
@@ -109,3 +114,33 @@ class HttpReader:
             msg = f"{name} was not a JSON object"
             raise ReaderError(msg)
         return body
+
+    async def _first_of_two(self, name: str) -> httpx.Response:
+        """The page, asked for once more when the first try fails or hangs; the first answer wins."""
+        first = asyncio.ensure_future(self._once(name))
+        running = {first}
+        try:
+            done, _ = await asyncio.wait(running, timeout=HEDGE_AFTER)
+            if first in done and first.exception() is None:
+                return first.result()
+            # RULE: a page is asked for at most twice
+            running.add(asyncio.ensure_future(self._once(name)))
+            running -= done
+            failure: BaseException | None = first.exception() if first in done else None
+            while running:
+                done, running = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    if task.exception() is None:
+                        return task.result()
+                    failure = task.exception()
+            raise failure or ReaderError(name)
+        finally:
+            for task in running:
+                task.cancel()
+
+    async def _once(self, name: str) -> httpx.Response:
+        async with httpx.AsyncClient(
+            transport=self._transport, timeout=TIMEOUT, follow_redirects=False
+        ) as client:
+            # RULE: a page is only ever read with get
+            return await client.get(f"{self._base}/{name}")

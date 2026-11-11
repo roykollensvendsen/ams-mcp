@@ -8,6 +8,7 @@ send nothing but GET, to the seven pages listed, and follows no redirect.
 
 import asyncio
 import json
+import time
 
 import httpx
 import pytest
@@ -113,3 +114,79 @@ def test_the_answer_says_when_it_was_read():
     page = asyncio.run(r.page("data.json"))
     assert page.body == {"a": 1}
     assert page.read_at == 1794402646.0
+
+
+def _slow(seconds):
+    async def handler(request):
+        await asyncio.sleep(seconds)
+        return httpx.Response(200, json={})
+
+    return handler
+
+
+def test_a_reader_slow_to_wake_still_answers_within_its_time(monkeypatch):
+    # On 2026-11-11 one GET of data.json took 5.7 s while the reader woke its
+    # Wi-Fi, and every other took under half a second. A wait of 5 s for the
+    # connection alone turned that into "did not answer".
+    monkeypatch.setattr(reader, "TIMEOUT", 0.3)
+    page = asyncio.run(_reader(_slow(0.2)).page("data.json"))
+    assert page.body == {}
+
+
+def test_a_page_has_one_time_limit_for_the_whole_read(monkeypatch):
+    monkeypatch.setattr(reader, "TIMEOUT", 0.1)
+    with pytest.raises(reader.ReaderError):
+        asyncio.run(_reader(_slow(0.5)).page("data.json"))
+
+
+def test_a_page_waits_long_enough_for_the_slowest_wake_seen():
+    slowest_seen = 5.7  # seconds, 2026-11-11
+    assert 1.5 * slowest_seen <= reader.TIMEOUT
+
+
+def _counted(*behaviours):
+    """A reader that behaves as told on each request in turn: a delay, or an exception."""
+    calls = []
+
+    async def handler(request):
+        what = behaviours[min(len(calls), len(behaviours) - 1)]
+        calls.append(request)
+        if isinstance(what, Exception):
+            raise what
+        await asyncio.sleep(what)
+        return httpx.Response(200, json={"n": len(calls)})
+
+    return handler, calls
+
+
+def test_a_read_that_hangs_is_asked_once_more_and_the_first_answer_wins(monkeypatch):
+    # A lost packet costs TCP a second, then three, then seven before it tries
+    # again; a fresh connection is usually answered at once.
+    monkeypatch.setattr(reader, "HEDGE_AFTER", 0.05)
+    handler, calls = _counted(5.0, 0.0)
+    started = time.monotonic()
+    page = asyncio.run(_reader(handler).page("data.json"))
+    assert page.body == {"n": 2}
+    assert time.monotonic() - started < 1.0
+    assert len(calls) == 2
+
+
+def test_a_read_that_fails_at_once_is_asked_once_more(monkeypatch):
+    monkeypatch.setattr(reader, "HEDGE_AFTER", 5.0)
+    handler, calls = _counted(httpx.ConnectError("refused"), 0.0)
+    assert asyncio.run(_reader(handler).page("data.json")).body == {"n": 2}
+    assert len(calls) == 2
+
+
+def test_a_page_is_asked_for_at_most_twice(monkeypatch):
+    monkeypatch.setattr(reader, "HEDGE_AFTER", 0.01)
+    handler, calls = _counted(httpx.ConnectError("refused"))
+    with pytest.raises(reader.ReaderError):
+        asyncio.run(_reader(handler).page("data.json"))
+    assert len(calls) == 2
+
+
+def test_a_quick_answer_is_asked_for_once():
+    handler, calls = _counted(0.0)
+    asyncio.run(_reader(handler).page("data.json"))
+    assert len(calls) == 1
