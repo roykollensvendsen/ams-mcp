@@ -8,6 +8,8 @@ those pages, so a change in how a page is read shows here as a wrong number.
 
 import asyncio
 import copy
+import datetime as dt
+import itertools
 import zoneinfo
 
 import pytest
@@ -251,3 +253,48 @@ def test_every_error_says_what_is_wrong_and_what_to_do_next():
 def test_an_error_about_the_reader_names_where_it_is():
     for answer in list(_failures())[:3]:
         assert "reader.example" in answer["say"], answer["say"]
+
+
+# The nights the clocks change. The reader counts its prices in real hours from
+# now, and its day plot by UTC hour; neither knows about summer time.
+
+AUTUMN = dt.datetime(2026, 10, 25, 0, 30, tzinfo=OSLO).timestamp()  # clocks go back at 03:00
+SPRING = dt.datetime(2026, 3, 29, 0, 30, tzinfo=OSLO).timestamp()  # clocks go forward at 02:00
+
+
+def test_hours_are_counted_in_real_hours_not_on_the_clock():
+    test_prices_on_the_night_the_clocks_go_back_name_02_00_twice()
+    test_prices_on_the_night_the_clocks_go_forward_skip_02_00()
+
+
+def test_prices_on_the_night_the_clocks_go_back_name_02_00_twice():
+    a = _ask("price", Pages(read_at=AUTUMN), now=AUTUMN + 1)
+    assert [h["hour"] for h in a["next"][:4]] == ["01:00", "02:00", "02:00", "03:00"]
+    assert a["next"][1]["price"] == recorded("energyprice.json")["02"]
+    assert len([o for o in a["next"] if o["hour"] < "24"]) == service.NEXT_HOURS
+
+
+def test_prices_on_the_night_the_clocks_go_forward_skip_02_00():
+    a = _ask("price", Pages(read_at=SPRING), now=SPRING + 1)
+    assert [h["hour"] for h in a["next"][:3]] == ["01:00", "03:00", "04:00"]
+    assert a["next"][1]["price"] == recorded("energyprice.json")["02"]
+
+
+def test_the_cheapest_hours_left_today_count_the_25_hour_day():
+    # Offset 24 is 23:00 on the 25th, the day's 25th hour; offset 25 is midnight, tomorrow.
+    def cheap_late(body):
+        body["24"], body["25"] = 0.01, 0.001
+
+    a = _ask("price", Pages({"energyprice.json": cheap_late}, read_at=AUTUMN), now=AUTUMN + 1)
+    assert a["cheapest_today"][0] == {"hour": "23:00", "price": 0.01}
+    assert "00:00" not in [c["hour"] for c in a["cheapest_today"]]
+
+
+@pytest.mark.parametrize("day", [AUTUMN, SPRING])
+def test_the_day_plot_on_a_clock_change_reads_each_utc_hour_once(day):
+    noon = day + 12 * 3600
+    a = _ask("history", Pages(read_at=noon), now=noon + 1)
+    starts = [dt.datetime.fromisoformat(h["start"]) for h in a["hours"]]
+    utc_hours = [s.astimezone(dt.UTC).hour for s in starts]
+    assert sorted(utc_hours) == list(range(24))
+    assert all((b - a_).total_seconds() == 3600 for a_, b in itertools.pairwise(starts))

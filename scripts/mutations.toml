@@ -134,3 +134,9 @@ name = "an empty rule table is not a crash"
 file = "scripts/mutate.py"
 find = '^\s*rules = tomllib\.loads\(TABLE\.read_text\(\)\)\.get\("rule", \[\]\)$'
 replace = 'rules = tomllib.loads(TABLE.read_text())["rule"]'
+
+[[rule]]
+name = "hours are counted in real hours, not on the clock"
+file = "src/ams_mcp/service.py"
+find = 'return \(moment\.astimezone\(dt\.UTC\) \+ dt\.timedelta\(hours=hours\)\)\.astimezone\(self\._tz\)'
+replace = 'return moment + dt.timedelta(hours=hours)'
