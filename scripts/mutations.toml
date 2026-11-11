@@ -140,3 +140,9 @@ name = "hours are counted in real hours, not on the clock"
 file = "src/ams_mcp/service.py"
 find = 'return \(moment\.astimezone\(dt\.UTC\) \+ dt\.timedelta\(hours=hours\)\)\.astimezone\(self\._tz\)'
 replace = 'return moment + dt.timedelta(hours=hours)'
+
+[[rule]]
+name = "a reader that answers wrongly is not blamed on its power or wifi"
+file = "src/ams_mcp/service.py"
+find = 'except StrangeAnswerError as error:'
+replace = 'except ZeroDivisionError as error:'

@@ -48,6 +48,15 @@ class ReaderError(RuntimeError):
     """The reader did not answer, or not with a page."""
 
 
+class StrangeAnswerError(ReaderError):
+    """The reader answered, but not with the page: a firmware it was not written for, or a login."""
+
+    def __init__(self, message: str, *, login: bool = False) -> None:
+        """Why the answer was strange; login when the reader asked for one."""
+        super().__init__(message)
+        self.login = login
+
+
 class RefusedPageError(ValueError):
     """A page outside the allow-list was asked for, and nothing was sent."""
 
@@ -105,15 +114,16 @@ class HttpReader:
             raise ReaderError(msg) from error
         if response.status_code != httpx.codes.OK:
             msg = f"the reader answered {response.status_code} for {name}"
-            raise ReaderError(msg)
+            login = response.status_code in {httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN}
+            raise StrangeAnswerError(msg, login=login)
         try:
             body = json.loads(response.content)
         except ValueError as error:
             msg = f"{name} was not JSON"
-            raise ReaderError(msg) from error
+            raise StrangeAnswerError(msg) from error
         if not isinstance(body, dict):
             msg = f"{name} was not a JSON object"
-            raise ReaderError(msg)
+            raise StrangeAnswerError(msg)
         return body
 
     async def _read(self, name: str) -> httpx.Response:
