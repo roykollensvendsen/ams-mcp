@@ -71,7 +71,9 @@ after still hold last month's.
 ## temperature.json and sysinfo.json
 
 `temperature.json`: `c` the number of sensors, `s` each one's `i` index, `a`
-hardware address (never kept), and `v` degrees Celsius.
+hardware address (never kept), and `v` degrees Celsius. It is on the allow-list
+and recorded, but no tool reads it yet: the reader serves one connection at a
+time best, so `ams_now` asks for nothing it does not say.
 
 `sysinfo.json` carries the firmware `version` and `last_month` (`u`, `c`, `p`,
 `i`, as in `ea.m`). Everything else on it, such as the meter's id, the network

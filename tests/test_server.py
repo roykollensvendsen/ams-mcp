@@ -88,7 +88,9 @@ def test_every_tool_answers_with_a_sentence_even_when_it_fails():
     for tool in TOOLS:
         answer = _call(_server(_Broken(), simulated=False), tool)
         assert answer["success"] is False, tool
-        assert answer["say"] == server.BROKE, tool
+        question = tool.removeprefix("ams_")
+        assert answer["say"] == server.BROKE.format(question=question), tool
+        assert answer["say"].endswith(f"run: cd ~/ams-mcp && uv run ams-mcp ask {question}"), tool
 
 
 def test_a_tool_still_working_at_the_deadline_says_so(monkeypatch):
