@@ -33,11 +33,19 @@ class Unconfigured:
         raise SettingsError(self._problem)
 
 
-def _service(*, simulate: bool, settings_file: str | None) -> AmsService:
+def make_service(*, simulate: bool, settings_file: str | None, serving: bool) -> AmsService:
+    """The service to answer from: pretend, real, or, when serving without settings, one that says so."""
     if simulate:
         return AmsService(SimulatedReader(), timezone=local_timezone())
     path = pathlib.Path(settings_file).expanduser() if settings_file else settings_path()
-    settings = load_settings(path)
+    try:
+        settings = load_settings(path)
+    except SettingsError as error:
+        if not serving:
+            raise
+        sys.stderr.write(f"ams-mcp: {error}\n")
+        # RULE: a plugin without settings still starts and says what to write
+        return AmsService(Unconfigured(str(error)), timezone=local_timezone())
     return AmsService(HttpReader(settings.address), timezone=settings.timezone, where=settings.address)
 
 
@@ -50,15 +58,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--simulate", action="store_true", help="a pretend meter reader, no network")
     parser.add_argument("--settings-file", help="instead of ~/.config/ams-mcp/config.toml")
     args = parser.parse_args(argv)
+    serving = args.command == "serve"
     try:
-        service = _service(simulate=args.simulate, settings_file=args.settings_file)
+        service = make_service(simulate=args.simulate, settings_file=args.settings_file, serving=serving)
     except SettingsError as error:
         sys.stderr.write(f"ams-mcp: {error}\n")
-        if args.command != "serve":
-            return 2
-        # RULE: a plugin without settings still starts and says what to write
-        service = AmsService(Unconfigured(str(error)), timezone=local_timezone())
-    if args.command == "serve":  # pragma: no cover - runs until stdin closes
+        return 2
+    if serving:  # pragma: no cover - runs until stdin closes
         asyncio.run(build_server(service, simulated=args.simulate).run_stdio_async())
         return 0
     question = args.question or "now"

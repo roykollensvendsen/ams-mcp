@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The owner's settings file: where the reader is, read from outside the repository."""
 
+import asyncio
+
 import pytest
 
 from ams_mcp import cli
@@ -47,3 +49,19 @@ def test_an_unknown_time_zone_is_refused(tmp_path):
 def test_the_command_refuses_to_start_without_settings(tmp_path, capsys):
     assert cli.main(["ask", "now", "--settings-file", str(tmp_path / "none.toml")]) == 2
     assert "There is no settings file" in capsys.readouterr().err
+
+
+def test_a_server_without_settings_answers_each_tool_with_what_to_write(tmp_path, capsys):
+    missing = tmp_path / "config.toml"
+    service = cli.make_service(simulate=False, settings_file=str(missing), serving=True)
+    assert "There is no settings file" in capsys.readouterr().err
+    for answer in (asyncio.run(service.now()), asyncio.run(service.history("month"))):
+        assert answer["success"] is False
+        assert answer["say"].startswith("ams-mcp can't read its settings. There is no settings file at ")
+        assert str(missing) in answer["say"]
+        assert answer["say"].endswith("Then restart the plugin.")
+
+
+def test_a_question_without_settings_still_stops(tmp_path):
+    with pytest.raises(SettingsError):
+        cli.make_service(simulate=False, settings_file=str(tmp_path / "none.toml"), serving=False)
