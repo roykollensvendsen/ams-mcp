@@ -8,7 +8,7 @@ import asyncio
 import pathlib
 import sys
 
-from ams_mcp.reader import HttpReader
+from ams_mcp.reader import HttpReader, Page
 from ams_mcp.server import build_server
 from ams_mcp.service import PERIODS, AmsService
 from ams_mcp.settings import SettingsError, load_settings, local_timezone, settings_path
@@ -19,6 +19,18 @@ from ams_mcp.simulator import SimulatedReader
 COMMANDS: tuple[str, ...] = ("serve", "ask")
 #: What `ask` can ask: one per tool.
 QUESTIONS = ("now", "energy", "price", "capacity", "history")
+
+
+class Unconfigured:
+    """A reader with no settings: every page it is asked for says what the settings lack."""
+
+    def __init__(self, problem: str) -> None:
+        """The settings' problem, as SettingsError said it."""
+        self._problem = problem
+
+    async def page(self, name: str) -> Page:  # noqa: ARG002 - the Source protocol's argument
+        """Never a page: the reason there is none, whichever page was asked for."""
+        raise SettingsError(self._problem)
 
 
 def _service(*, simulate: bool, settings_file: str | None) -> AmsService:
@@ -42,7 +54,10 @@ def main(argv: list[str] | None = None) -> int:
         service = _service(simulate=args.simulate, settings_file=args.settings_file)
     except SettingsError as error:
         sys.stderr.write(f"ams-mcp: {error}\n")
-        return 2
+        if args.command != "serve":
+            return 2
+        # RULE: a plugin without settings still starts and says what to write
+        service = AmsService(Unconfigured(str(error)), timezone=local_timezone())
     if args.command == "serve":  # pragma: no cover - runs until stdin closes
         asyncio.run(build_server(service, simulated=args.simulate).run_stdio_async())
         return 0

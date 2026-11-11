@@ -49,7 +49,7 @@ def local_timezone() -> dt.tzinfo:
 def load_settings(path: pathlib.Path) -> Settings:
     """The settings in the file, checked."""
     if not path.is_file():
-        msg = f'No settings file at {path}; write [reader] address = "..." there, or use --simulate.'
+        msg = f'There is no settings file at {path}. Write [reader] address = "..." there, or use --simulate.'
         raise SettingsError(msg)
     try:
         table = tomllib.loads(path.read_text()).get("reader", {})
