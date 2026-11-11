@@ -30,6 +30,7 @@ decision nobody writes down.
 | Id | Decides | Status |
 |---|---|---|
 | [ADR-AM-001](ADR-AM-001-read-the-readers-own-pages-over-http.md) | Read the reader's own pages over HTTP, with GET only | Accepted |
+| [ADR-AM-002](ADR-AM-002-main-keeps-the-quality-levels.md) | Main keeps the quality levels, so a pull request never records them | Accepted |
 
 What is deliberately left undone, and what would make each worth doing, is
 [`deferred.md`](deferred.md). A thing left undone with no trigger is a thing
