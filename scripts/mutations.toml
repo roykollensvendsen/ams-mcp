@@ -1,0 +1,84 @@
+# Every rule this project enforces, and the one line that carries it.
+#
+# A rule nothing catches is a rule nothing protects. `scripts/mutate.py` turns
+# each of these off in turn and runs the suite; a rule whose removal breaks no
+# test has no test. Add a test of your own that counts the rules in the source
+# against the rows here, so this list cannot fall behind.
+#
+# `find` is a regular expression matching the single line to replace; `replace`
+# is what replaces it, keeping the file valid. The line's own indentation is
+# kept, so do not write indentation here.
+#
+# [[rule]]
+# name = "what the rule says, in words"
+# file = "src/ams_mcp/somewhere.py"
+# find = 'if limit_exceeded:'
+# replace = 'if False:'
+
+[[rule]]
+name = "a commit message never links to a Claude session"
+file = "scripts/no_session_links.py"
+find = 'if SESSION\.search\(message\):'
+replace = 'if False:'
+
+[[rule]]
+name = "a home-network address is never committed"
+file = "scripts/private_data_scan.py"
+find = 'found \+= \[f"home-network address \{m\}" for m in PRIVATE_IPV4\.findall\(text\)\]'
+replace = 'pass'
+
+[[rule]]
+name = "a value from the settings file is never committed"
+file = "scripts/private_data_scan.py"
+find = 'found \+= \[f"a value from \{SETTINGS\.name\}" for s in secrets if s in text\]'
+replace = 'pass'
+
+
+
+[[rule]]
+name = "only an allow-listed page is ever asked for"
+file = "src/ams_mcp/reader.py"
+find = 'if name not in PAGES:'
+replace = 'if False:'
+
+[[rule]]
+name = "a page is only ever read with get"
+file = "src/ams_mcp/reader.py"
+find = 'response = await client\.get\(f"\{self\._base\}/\{name\}"\)'
+replace = 'response = await client.post(f"{self._base}/{name}")'
+
+[[rule]]
+name = "the address is a bare host, so no other page can be reached through it"
+file = "src/ams_mcp/settings.py"
+find = 'if not isinstance\(address, str\) or not _ADDRESS\.fullmatch\(address\):'
+replace = 'if not isinstance(address, str):'
+
+[[rule]]
+name = "a reading older than about half a minute is not confirmed"
+file = "src/ams_mcp/service.py"
+find = 'if age > STALE_AFTER:'
+replace = 'if False:'
+
+[[rule]]
+name = "a reader that does not answer is said, and nothing is guessed"
+file = "src/ams_mcp/service.py"
+find = 'return \{"success": False, "say": UNREACHABLE\}'
+replace = 'return {"success": True, "say": "Drawing 0.00 kW from the grid now."}'
+
+[[rule]]
+name = "a tool still working at the deadline says so"
+file = "src/ams_mcp/server.py"
+find = 'answer = await asyncio\.wait_for\(tool\(\*args, \*\*kwargs\), ANSWER_WITHIN\)'
+replace = 'answer = await tool(*args, **kwargs)'
+
+[[rule]]
+name = "every tool answers with a sentence, even when it fails"
+file = "src/ams_mcp/server.py"
+find = 'answer = \{"success": False, "say": BROKE\}'
+replace = 'raise'
+
+[[rule]]
+name = "every simulated answer says simulated first"
+file = "src/ams_mcp/server.py"
+find = 'if self\._simulated:'
+replace = 'if False:'
