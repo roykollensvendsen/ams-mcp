@@ -46,4 +46,4 @@ def test_an_unknown_time_zone_is_refused(tmp_path):
 
 def test_the_command_refuses_to_start_without_settings(tmp_path, capsys):
     assert cli.main(["ask", "now", "--settings-file", str(tmp_path / "none.toml")]) == 2
-    assert "No settings file" in capsys.readouterr().err
+    assert "There is no settings file" in capsys.readouterr().err

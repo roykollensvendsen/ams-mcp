@@ -47,11 +47,20 @@ address = "192.0.2.10"     # the reader's address on your network
 timezone = "Europe/Oslo"   # optional; the computer's own by default
 ```
 
-Without it, the server says where the file should be and stops:
+Without it, a question says where the file should be:
 
 ```console
-$ ams-mcp serve --settings-file /nowhere/config.toml
-ams-mcp: No settings file at /nowhere/config.toml; write [reader] address = "..." there, or use --simulate.
+$ ams-mcp ask now --settings-file /nowhere/config.toml
+ams-mcp: There is no settings file at /nowhere/config.toml. Write [reader] address = "..." there, or use --simulate.
+```
+
+`ams-mcp serve` still starts without it, so the voice sees the plugin, and
+every tool answers with the same advice and "Then restart the plugin." It
+says so once on its error output, and serves until its input closes:
+
+```console
+$ ams-mcp serve --settings-file /nowhere/config.toml < /dev/null
+ams-mcp: There is no settings file at /nowhere/config.toml. Write [reader] address = "..." there, or use --simulate.
 ```
 
 `ams-mcp serve` then serves the tools over stdio. For claude-voice:

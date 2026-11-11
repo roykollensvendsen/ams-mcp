@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from ams_mcp import pages, say
 from ams_mcp.pages import FIRMWARE, PageError
 from ams_mcp.reader import ReaderError, StrangeAnswerError
+from ams_mcp.settings import SettingsError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -97,6 +98,11 @@ class AmsService:
     ) -> dict[str, Any]:
         try:
             answer, read = await work()
+        except SettingsError as error:
+            return {
+                "success": False,
+                "say": f"ams-mcp can't read its settings. {error} Then restart the plugin.",
+            }
         except StrangeAnswerError as error:
             # RULE: a reader that answers wrongly is not blamed on its power or wifi
             return {"success": False, "say": (LOGIN if error.login else UNKNOWN).format(where=self._where)}

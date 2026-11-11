@@ -48,3 +48,26 @@ def test_a_cold_start_never_waits_on_the_reader(tmp_path):
     names, seconds = _listed(["serve", "--settings-file", str(settings)], env=env)
     assert names == TOOLS
     assert seconds <= COLD_START_WITHIN
+
+
+def test_a_plugin_without_settings_still_starts_and_says_what_to_write(tmp_path):
+    # Without a settings file the bridge used to see a process that exited at
+    # once, and the voice saw no plugin at all, so nothing could say what was wrong.
+    missing = tmp_path / "config.toml"
+
+    async def run():
+        params = StdioServerParameters(
+            command=sys.executable, args=["-m", "ams_mcp.cli", "serve", "--settings-file", str(missing)]
+        )
+        async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
+            await session.initialize()
+            names = {tool.name for tool in (await session.list_tools()).tools}
+            answer = (await session.call_tool("ams_now", {})).structured_content
+            return names, answer
+
+    names, answer = asyncio.run(run())
+    assert names == TOOLS
+    assert answer["success"] is False
+    assert str(missing) in answer["say"]
+    assert '[reader] address = "..."' in answer["say"]
+    assert answer["say"].endswith("Then restart the plugin.")
