@@ -26,7 +26,7 @@ def _service(*, simulate: bool, settings_file: str | None) -> AmsService:
         return AmsService(SimulatedReader(), timezone=local_timezone())
     path = pathlib.Path(settings_file).expanduser() if settings_file else settings_path()
     settings = load_settings(path)
-    return AmsService(HttpReader(settings.address), timezone=settings.timezone)
+    return AmsService(HttpReader(settings.address), timezone=settings.timezone, where=settings.address)
 
 
 def main(argv: list[str] | None = None) -> int:

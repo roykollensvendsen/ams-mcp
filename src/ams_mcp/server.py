@@ -32,7 +32,7 @@ ANSWER_WITHIN = 12.0
 #: What the voice hears when a tool is still working by then.
 WORKING = "The meter reader is slow to answer just now. Ask again in a moment."
 #: What the voice hears when ams-mcp itself fails, so it never hears only that the tool failed.
-BROKE = "That went wrong inside ams-mcp. Try again, and if it fails again, check its log."
+BROKE = "That went wrong inside ams-mcp. To see why, run: cd ~/ams-mcp && uv run ams-mcp ask {question}"
 
 READ_ONLY = ToolAnnotations(read_only_hint=True)
 
@@ -56,7 +56,7 @@ class _Guarded:
                     answer = {"success": False, "say": WORKING}
                 except Exception:  # noqa: BLE001 - whatever broke, the voice gets a sentence
                     # RULE: every tool answers with a sentence, even when it fails
-                    answer = {"success": False, "say": BROKE}
+                    answer = {"success": False, "say": BROKE.format(question=_question(tool.__name__))}
                 answer["simulated"] = self._simulated
                 # RULE: every simulated answer says simulated first
                 if self._simulated:
@@ -66,6 +66,11 @@ class _Guarded:
             return register(answered)
 
         return guard
+
+
+def _question(tool: str) -> str:
+    """The `ams-mcp ask` question that runs the same work as a tool: ams_now is "now"."""
+    return tool.removeprefix("ams_")
 
 
 def build_server(service: AmsService, *, simulated: bool = False) -> MCPServer[Any]:

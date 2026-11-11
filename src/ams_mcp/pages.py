@@ -118,14 +118,6 @@ class Days:
 
 
 @dataclass(frozen=True)
-class Sensor:
-    """One temperature sensor wired to the reader."""
-
-    index: int
-    celsius: float
-
-
-@dataclass(frozen=True)
 class System:
     """sysinfo.json, only the parts this plugin uses: never an address or an id."""
 
@@ -227,15 +219,6 @@ def days(page: dict[str, Any]) -> Days:
         {d: _number(page, f"i{d:02d}") for d in range(1, 32)},
         {d: _number(page, f"e{d:02d}") for d in range(1, 32)},
     )
-
-
-def sensors(page: dict[str, Any]) -> tuple[Sensor, ...]:
-    """temperature.json, named; a sensor's hardware address is left out."""
-    found = page.get("s")
-    if not isinstance(found, list):
-        msg = "'s' is not a list"
-        raise PageError(msg)
-    return tuple(Sensor(int(_number(s, "i")), _number(s, "v")) for s in found if isinstance(s, dict))
 
 
 def system(page: dict[str, Any]) -> System:

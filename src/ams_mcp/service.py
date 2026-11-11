@@ -30,12 +30,18 @@ NEXT_HOURS = 12
 #: How many hours ahead the price answer reads aloud, and how many cheap hours.
 SPOKEN_HOURS = 3
 
-UNREACHABLE = "The meter reader did not answer. Check that it has power and is on the Wi-Fi, then ask again."
-UNKNOWN = (
-    "The meter reader answered in a shape this plugin does not know; "
-    f"it was written for firmware {FIRMWARE}. Check the reader's firmware version."
+#: Every failure says what is wrong and what to do next; {where} is the reader's address.
+UNREACHABLE = (
+    "The meter reader at {where} doesn't answer. Check that it has power and is on the Wi-Fi, then ask again."
 )
-NO_PRICES = "The meter reader has no prices just now. Check its price source in the reader's own settings."
+UNKNOWN = (
+    "The meter reader at {where} answered in a shape this plugin doesn't know; it was written for firmware "
+    f"{FIRMWARE}. Open http://{{where}}/status and check the reader's firmware version."
+)
+NO_PRICES = (
+    "The meter reader at {where} has no prices just now. "
+    "Open http://{where}/priceconfig and check its price source."
+)
 PERIODS = ("day", "month")
 
 
@@ -47,10 +53,11 @@ class AmsService:
         source: Source,
         *,
         timezone: dt.tzinfo,
+        where: str = "its address",
         clock: Callable[[], float] = time.time,
     ) -> None:
-        """Answers from this source, with days and hours counted in this time zone."""
-        self._source, self._tz, self._clock = source, timezone, clock
+        """Answers from this source, with days and hours in this time zone; where names the reader."""
+        self._source, self._tz, self._clock, self._where = source, timezone, clock, where
 
     # The five tools
 
@@ -73,7 +80,10 @@ class AmsService:
     async def history(self, period: str = "day") -> dict[str, Any]:
         """A short summary of today by hour, or of this month by day."""
         if period not in PERIODS:
-            return {"success": False, "say": f"I can sum up a day or month, not {period!r}."}
+            return {
+                "success": False,
+                "say": f"I can sum up a day or month, not {period!r}. Ask for the day or the month.",
+            }
         return await self._answer(self._day if period == "day" else self._month)
 
     # How every answer is made
@@ -85,9 +95,9 @@ class AmsService:
             answer, read = await work()
         except ReaderError:
             # RULE: a reader that does not answer is said, and nothing is guessed
-            return {"success": False, "say": UNREACHABLE}
+            return {"success": False, "say": UNREACHABLE.format(where=self._where)}
         except (PageError, KeyError, TypeError, ValueError):
-            return {"success": False, "say": UNKNOWN}
+            return {"success": False, "say": UNKNOWN.format(where=self._where)}
         if not answer.get("success", True):
             return answer
         oldest = min(p.read_at for p in read)
@@ -111,7 +121,7 @@ class AmsService:
         return list(await asyncio.gather(*(self._source.page(n) for n in names)))
 
     async def _maybe(self, name: str) -> Page | None:
-        """A page an answer can do without, such as the temperatures."""
+        """A page an answer can do without, such as last month's totals."""
         try:
             return await self._source.page(name)
         except (ReaderError, PageError):
@@ -123,7 +133,7 @@ class AmsService:
     # The answers themselves
 
     async def _now(self) -> tuple[dict[str, Any], list[Page]]:
-        data, temps = await asyncio.gather(self._source.page("data.json"), self._maybe("temperature.json"))
+        data = await self._source.page("data.json")
         live = pages.live(data.body)
         if live.export_w > live.import_w:
             words = [f"Sending {say.kw(live.export_w)} kW to the grid now."]
@@ -152,11 +162,6 @@ class AmsService:
                 }
                 for p in live.phases
             ],
-            "temperatures": (
-                [{"sensor": s.index, "celsius": s.celsius} for s in pages.sensors(temps.body)]
-                if temps
-                else []
-            ),
         }
         return answer, [data]
 
@@ -192,7 +197,7 @@ class AmsService:
         page = await self._source.page("energyprice.json")
         found = pages.prices(page.body)
         if found.by_hour[0] is None:
-            return {"success": False, "say": NO_PRICES}, [page]
+            return {"success": False, "say": NO_PRICES.format(where=self._where)}, [page]
         kr = say.currency(found.currency)
         start = self._local(page.read_at).replace(minute=0, second=0, microsecond=0)
 

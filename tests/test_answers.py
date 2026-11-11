@@ -37,7 +37,7 @@ class Pages:
 
 
 def _ask(tool, pages=None, now=READ_AT + 1, **arguments):
-    svc = AmsService(pages or Pages(), timezone=OSLO, clock=lambda: now)
+    svc = AmsService(pages or Pages(), timezone=OSLO, where="reader.example", clock=lambda: now)
     return asyncio.run(getattr(svc, tool)(**arguments))
 
 
@@ -213,7 +213,7 @@ def test_a_reader_that_does_not_answer_is_said_and_nothing_is_guessed():
     for tool in ("now", "energy", "price", "capacity", "history"):
         a = _ask(tool, Pages(broken=True))
         assert a["success"] is False, tool
-        assert a["say"].startswith("The meter reader did not answer."), tool
+        assert a["say"].startswith("The meter reader at reader.example doesn't answer."), tool
         assert "kW" not in a["say"], tool
 
 
@@ -221,3 +221,33 @@ def test_a_page_in_a_shape_the_firmware_does_not_give_is_refused():
     a = _ask("now", Pages({"data.json": lambda b: b.pop("ea")}))
     assert a["success"] is False
     assert "v2.4.11" in a["say"]
+
+
+#: Words that open the next step in a failure: what the owner should do or ask.
+NEXT_STEP = ("Check ", "Open http://", "run: ", "Ask ")
+
+
+def _failures():
+    def empty(body):
+        for k in list(body):
+            if k.isdigit():
+                body[k] = None
+
+    yield _ask("now", Pages(broken=True))
+    yield _ask("now", Pages({"data.json": lambda b: b.pop("ea")}))
+    yield _ask("price", Pages({"energyprice.json": empty}))
+    yield _ask("history", period="year")
+
+
+def test_every_error_says_what_is_wrong_and_what_to_do_next():
+    for answer in _failures():
+        say = answer["say"]
+        assert answer["success"] is False, say
+        wrong, _, after = say.partition(". ")
+        assert wrong, say
+        assert any(step in after or step in say.split("; ")[-1] for step in NEXT_STEP), say
+
+
+def test_an_error_about_the_reader_names_where_it_is():
+    for answer in list(_failures())[:3]:
+        assert "reader.example" in answer["say"], answer["say"]
