@@ -247,34 +247,13 @@ class AmsService:
         data, tariff_page = await self._pages("data.json", "tariff.json")
         live, tariff = pages.live(data.body), pages.tariff(tariff_page.body)
         moment = self._local(data.read_at)
-        top = (live.top_hours_kwh and len(live.top_hours_kwh)) or len(tariff.peaks) or 3
-        lower = [s for s in tariff.steps_kw if s < tariff.step_kw]
-        highest = tariff.step_kw not in tariff.steps_kw
-        step = {
-            "from_kw": max(tariff.steps_kw) if highest else (max(lower) if lower else 0),
-            "to_kw": None if highest else tariff.step_kw,
-        }
         hour_left = 1 - (moment.minute * 60 + moment.second) / 3600
         projected = live.hour.import_kwh + live.import_w / 1000 * hour_left
-        needed = None if highest else _needed(tariff, top, moment.day)
-        peaks = [f"{say.kwh(p.kwh)} on the {say.ordinal(p.day)}" for p in tariff.peaks]
-        if highest:
-            words = [f"Capacity step over {step['from_kw']} kW, the highest step."]
-        else:
-            words = [f"Capacity step {step['from_kw']} to {step['to_kw']} kW."]
-        count = {1: "top hour", 2: "top two hours", 3: "top three hours"}.get(len(peaks), "top hours")
-        if peaks:
-            words.append(
-                f"Your {count} average {say.rounded(tariff.month_max_kwh, 2)} kW: {say.listing(peaks)}."
-            )
-        words.append(
-            f"This hour has used {say.kwh(live.hour.import_kwh)} kWh, and at this rate ends near "
-            f"{say.kwh(projected)}."
-        )
-        if needed is not None:
-            words.append(f"It would take over {say.kwh(needed)} kWh this hour to reach the next step.")
+        step = _step(tariff)
+        top = (live.top_hours_kwh and len(live.top_hours_kwh)) or len(tariff.peaks) or 3
+        needed = None if step["to_kw"] is None else _needed(tariff, top, moment.day)
         answer = {
-            "say": " ".join(words),
+            "say": " ".join(_capacity_words(tariff, step, live.hour.import_kwh, projected, needed)),
             "step": step,
             "month_average_kw": tariff.month_max_kwh,
             "top_hours": [{"day": p.day, "kwh": p.kwh} for p in tariff.peaks],
@@ -358,6 +337,32 @@ def _spent(spent: pages.Spent) -> dict[str, float]:
         "cost": spent.cost,
         "income": spent.income,
     }
+
+
+def _step(tariff: pages.Tariff) -> dict[str, int | None]:
+    """The capacity step the month is in: from the edge below to its own edge, or None above the top."""
+    if tariff.step_kw not in tariff.steps_kw:
+        return {"from_kw": max(tariff.steps_kw, default=0), "to_kw": None}
+    lower = [s for s in tariff.steps_kw if s < tariff.step_kw]
+    return {"from_kw": max(lower, default=0), "to_kw": tariff.step_kw}
+
+
+def _capacity_words(
+    tariff: pages.Tariff, step: dict[str, int | None], used: float, projected: float, needed: float | None
+) -> list[str]:
+    """The capacity answer, sentence by sentence."""
+    if step["to_kw"] is None:
+        words = [f"Capacity step over {step['from_kw']} kW, the highest step."]
+    else:
+        words = [f"Capacity step {step['from_kw']} to {step['to_kw']} kW."]
+    peaks = [f"{say.kwh(p.kwh)} on the {say.ordinal(p.day)}" for p in tariff.peaks]
+    count = {1: "top hour", 2: "top two hours", 3: "top three hours"}.get(len(peaks), "top hours")
+    if peaks:
+        words.append(f"Your {count} average {say.rounded(tariff.month_max_kwh, 2)} kW: {say.listing(peaks)}.")
+    words.append(f"This hour has used {say.kwh(used)} kWh, and at this rate ends near {say.kwh(projected)}.")
+    if needed is not None:
+        words.append(f"It would take over {say.kwh(needed)} kWh this hour to reach the next step.")
+    return words
 
 
 def _needed(tariff: pages.Tariff, top: int, today: int) -> float:
