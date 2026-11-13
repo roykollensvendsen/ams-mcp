@@ -159,27 +159,23 @@ def _counted(*behaviours):
     return handler, calls
 
 
-def test_a_read_that_hangs_is_asked_once_more_with_the_time_left(monkeypatch):
-    # A lost packet costs TCP a second, then three, then seven before it tries
-    # again; a fresh connection is usually answered at once.
-    monkeypatch.setattr(reader, "FIRST_TRY", 0.05)
+def test_a_read_that_hangs_keeps_its_one_request_for_the_whole_time(monkeypatch):
+    # The reader may still be serving it, so a second request would only wait
+    # behind the first. A lost packet is sent again by TCP itself.
+    monkeypatch.setattr(reader, "TIMEOUT", 0.2)
     handler, calls = _counted(5.0, 0.0)
-    started = time.monotonic()
-    page = asyncio.run(_reader(handler).page("data.json"))
-    assert page.body == {"n": 2}
-    assert time.monotonic() - started < 1.0
-    assert len(calls) == 2
+    with pytest.raises(reader.ReaderError, match=r"data\.json was not answered for 0\.2 s"):
+        asyncio.run(_reader(handler).page("data.json"))
+    assert len(calls) == 1
 
 
-def test_a_read_that_fails_at_once_is_asked_once_more(monkeypatch):
-    monkeypatch.setattr(reader, "FIRST_TRY", 5.0)
+def test_a_read_that_fails_at_once_is_asked_once_more():
     handler, calls = _counted(httpx.ConnectError("refused"), 0.0)
     assert asyncio.run(_reader(handler).page("data.json")).body == {"n": 2}
     assert len(calls) == 2
 
 
-def test_a_page_is_asked_for_at_most_twice(monkeypatch):
-    monkeypatch.setattr(reader, "FIRST_TRY", 0.01)
+def test_a_page_is_asked_for_at_most_twice():
     handler, calls = _counted(httpx.ConnectError("refused"))
     with pytest.raises(reader.ReaderError):
         asyncio.run(_reader(handler).page("data.json"))
@@ -194,10 +190,53 @@ def test_a_quick_answer_is_asked_for_once():
 
 def test_both_tries_together_stay_inside_one_time_limit(monkeypatch):
     monkeypatch.setattr(reader, "TIMEOUT", 0.3)
-    monkeypatch.setattr(reader, "FIRST_TRY", 0.2)
-    handler, calls = _counted(5.0)
+    handler, calls = _counted(httpx.ConnectError("dropped"), 5.0)
     started = time.monotonic()
     with pytest.raises(reader.ReaderError):
         asyncio.run(_reader(handler).page("data.json"))
     assert time.monotonic() - started < 0.5
     assert len(calls) == 2
+
+
+class StillServing(httpx.AsyncBaseTransport):
+    """A reader that serves requests one by one, in order, and finishes each one it began.
+
+    The firmware's WebServer learns that a visitor left only when it writes its
+    answer, so a request the plugin gave up on still holds the reader until it
+    is done. Each request takes the next of the given times, then the last.
+    """
+
+    def __init__(self, *seconds):
+        self.seconds, self.busy = seconds, asyncio.Lock()
+        self.asked = self.asked_while_busy = 0
+
+    async def handle_async_request(self, request):
+        seconds = self.seconds[min(self.asked, len(self.seconds) - 1)]
+        self.asked += 1
+        self.asked_while_busy += self.busy.locked()
+
+        async def serve():
+            async with self.busy:
+                await asyncio.sleep(seconds)
+            return httpx.Response(200, json={"n": self.asked})
+
+        # Like httpx's own transport, it gives up on the read after the limit httpx passes it.
+        limit = request.extensions.get("timeout", {}).get("read")
+        try:
+            return await asyncio.wait_for(asyncio.shield(asyncio.ensure_future(serve())), limit)
+        except TimeoutError as error:
+            raise httpx.ReadTimeout("no answer yet", request=request) from error
+
+
+def test_a_reader_still_serving_a_page_is_not_asked_for_it_again(monkeypatch):
+    # A slow wake, longer than the first try was once given: a second request
+    # then only waits behind the first, and leaves the reader busy afterwards.
+    monkeypatch.setattr(reader, "TIMEOUT", 1.0)
+    # Before this rule a hung first try was given up after FIRST_TRY seconds, and
+    # this test was red with it at 0.05 s. It is set so that it would still apply.
+    monkeypatch.setattr(reader, "FIRST_TRY", 0.05, raising=False)
+    fake = StillServing(0.3, 0.0)
+    page = asyncio.run(HttpReader("192.0.2.10", transport=fake).page("data.json"))
+    assert page.body == {"n": 1}
+    assert fake.asked == 1
+    assert fake.asked_while_busy == 0

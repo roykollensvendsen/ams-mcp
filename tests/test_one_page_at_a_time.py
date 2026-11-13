@@ -91,7 +91,6 @@ def test_a_page_waiting_its_turn_still_gives_up_within_its_own_time(monkeypatch)
     # The time a page waits behind another counts against its own limit, so a
     # reader that hangs never makes an answer wait for several pages in a row.
     monkeypatch.setattr(reader, "TIMEOUT", 0.3)
-    monkeypatch.setattr(reader, "FIRST_TRY", 0.2)
     fake = OneAtATime(hang={"data.json"})
 
     async def two_at_once():
@@ -101,5 +100,7 @@ def test_a_page_waiting_its_turn_still_gives_up_within_its_own_time(monkeypatch)
     started = time.monotonic()
     first, second = asyncio.run(two_at_once())
     assert isinstance(first, reader.ReaderError)
+    assert "data.json was not answered" in str(first)
     assert isinstance(second, reader.ReaderError)
+    assert "monthplot.json waited its turn" in str(second)
     assert time.monotonic() - started < 0.5

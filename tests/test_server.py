@@ -114,16 +114,16 @@ def test_a_tool_still_working_at_the_deadline_says_so(monkeypatch):
 
 
 def test_a_tools_longest_wait_fits_in_the_voices_time():
-    # A tool reads its pages side by side, so its longest wait is one page's
-    # two tries, which share TIMEOUT; the guard cuts any tool off at ANSWER_WITHIN.
-    assert reader.FIRST_TRY < reader.TIMEOUT < server.ANSWER_WITHIN <= 12.0
+    # A tool's pages are read one at a time, but each page's TIMEOUT counts from
+    # when it was asked for, its wait in line included, so the longest wait is one
+    # TIMEOUT; the guard cuts any tool off at ANSWER_WITHIN.
+    assert reader.TIMEOUT < server.ANSWER_WITHIN <= 12.0
     assert server.ANSWER_WITHIN + 2.0 < VOICE_LIMIT  # room for the bridge and the network
 
 
 def test_a_reader_that_hangs_gets_the_error_and_its_next_step_inside_the_budget(monkeypatch):
     # The same path as the real thing, with every limit scaled down a hundredfold.
     monkeypatch.setattr(reader, "TIMEOUT", reader.TIMEOUT / 100)
-    monkeypatch.setattr(reader, "FIRST_TRY", reader.FIRST_TRY / 100)
     monkeypatch.setattr(server, "ANSWER_WITHIN", server.ANSWER_WITHIN / 100)
 
     async def hang(request):
