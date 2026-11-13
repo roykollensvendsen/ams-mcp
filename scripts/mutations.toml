@@ -96,8 +96,8 @@ replace = 'if False:'
 [[rule]]
 name = "a page is asked for at most twice"
 file = "src/ams_mcp/reader.py"
-find = 'for attempt in range\(TRIES\):'
-replace = 'for attempt in range(TRIES + 1):'
+find = 'for _ in range\(TRIES\):'
+replace = 'for _ in range(TRIES + 1):'
 
 [[rule]]
 name = "a subject in the past tense is refused"
@@ -156,5 +156,11 @@ replace = 'raise'
 [[rule]]
 name = "the reader is asked for one page at a time"
 file = "src/ams_mcp/reader.py"
-find = 'async with asyncio\.timeout_at\(deadline\), self\._turn:'
-replace = 'async with asyncio.timeout_at(deadline):'
+find = 'async with self\._turn:'
+replace = 'if True:'
+
+[[rule]]
+name = "a reader still serving a page is not asked for it again"
+file = "src/ams_mcp/reader.py"
+find = 'transport=self\._transport, timeout=TIMEOUT \+ 1, follow_redirects=False'
+replace = 'transport=self._transport, timeout=0.05, follow_redirects=False'
