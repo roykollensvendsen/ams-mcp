@@ -164,3 +164,9 @@ name = "a reader still serving a page is not asked for it again"
 file = "src/ams_mcp/reader.py"
 find = 'transport=self\._transport, timeout=TIMEOUT \+ 1, follow_redirects=False'
 replace = 'transport=self._transport, timeout=0.05, follow_redirects=False'
+
+[[rule]]
+name = "the pretend reader serves one visitor at a time"
+file = "src/ams_mcp/simulator.py"
+find = 'async with self\._busy:'
+replace = 'if True:'

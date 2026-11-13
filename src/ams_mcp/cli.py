@@ -8,11 +8,12 @@ import asyncio
 import pathlib
 import sys
 
+from ams_mcp import simulator
 from ams_mcp.reader import HttpReader, Page
 from ams_mcp.server import build_server
 from ams_mcp.service import PERIODS, AmsService
 from ams_mcp.settings import SettingsError, load_settings, local_timezone, settings_path
-from ams_mcp.simulator import SimulatedReader
+from ams_mcp.simulator import CONDITIONS, SimulatedReader
 
 #: Every verb this command has. The documentation test requires each one to
 #: appear in a worked example, so a verb cannot be added without one.
@@ -33,10 +34,10 @@ class Unconfigured:
         raise SettingsError(self._problem)
 
 
-def make_service(*, simulate: bool, settings_file: str | None, serving: bool) -> AmsService:
+def make_service(*, simulate: str | None, settings_file: str | None, serving: bool) -> AmsService:
     """The service to answer from: pretend, real, or, when serving without settings, one that says so."""
     if simulate:
-        return AmsService(SimulatedReader(), timezone=local_timezone())
+        return AmsService(SimulatedReader(simulate), timezone=local_timezone(), where=simulator.ADDRESS)
     path = pathlib.Path(settings_file).expanduser() if settings_file else settings_path()
     try:
         settings = load_settings(path)
@@ -55,7 +56,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("command", choices=COMMANDS)
     parser.add_argument("question", nargs="?", choices=QUESTIONS, help="for ask: which tool's answer")
     parser.add_argument("--period", choices=PERIODS, default="day", help="for ask history")
-    parser.add_argument("--simulate", action="store_true", help="a pretend meter reader, no network")
+    parser.add_argument(
+        "--simulate",
+        nargs="?",
+        const="awake",
+        choices=CONDITIONS,
+        help="a pretend meter reader, no network; optionally in a condition the real one has been in",
+    )
     parser.add_argument("--settings-file", help="instead of ~/.config/ams-mcp/config.toml")
     args = parser.parse_args(argv)
     serving = args.command == "serve"
@@ -65,14 +72,14 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"ams-mcp: {error}\n")
         return 2
     if serving:  # pragma: no cover - runs until stdin closes
-        asyncio.run(build_server(service, simulated=args.simulate).run_stdio_async())
+        asyncio.run(build_server(service, simulated=args.simulate is not None).run_stdio_async())
         return 0
     question = args.question or "now"
     if question == "history":
         answer = asyncio.run(service.history(args.period))
     else:
         answer = asyncio.run(getattr(service, question)())
-    prefix = "Simulated: " if args.simulate else ""
+    prefix = "Simulated: " if args.simulate is not None else ""
     sys.stdout.write(prefix + answer["say"] + "\n")
     return 0 if answer["success"] else 1
 

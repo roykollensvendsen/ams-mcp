@@ -35,6 +35,18 @@ $ ams-mcp ask energy --simulate
 Simulated: Today 33.2 kWh, 30.85 kr. This hour 0.32 kWh. This month 605 kWh, 548 kr.
 ```
 
+The pretend reader is read through the same code as the real one, and keeps
+its limits: one visitor at a time, about a twentieth of a second a page. It can
+also be put in a state the real reader has been seen in, to hear what the voice
+then says. `asleep` makes the first answer wait six seconds while it wakes its
+Wi-Fi, `off` is not found on the network, `meter-quiet` has had no reading
+from the meter lately, and `login` asks for one:
+
+```console
+$ ams-mcp ask now --simulate meter-quiet
+Simulated: Not confirmed: the reader has not heard from the meter for over 30 seconds. Drawing 1.05 kW from the grid now. The phases carry 2.9, 0.9 and 1.5 A. This meter sends no power factor.
+```
+
 ## Point it at the reader
 
 The address goes in a file of your own, never in this repository:
