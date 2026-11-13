@@ -170,3 +170,15 @@ name = "the pretend reader serves one visitor at a time"
 file = "src/ams_mcp/simulator.py"
 find = 'async with self\._busy:'
 replace = 'if True:'
+
+[[rule]]
+name = "an import a layer may not use is a breach"
+file = "scripts/ratchet.py"
+find = 'if layer\(inside\) not in ALLOWED\[mine\]:'
+replace = 'if False:'
+
+[[rule]]
+name = "a module with no layer is a breach"
+file = "scripts/ratchet.py"
+find = 'if layer\(module\) == "unassigned":'
+replace = 'if False:'
