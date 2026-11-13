@@ -152,3 +152,9 @@ name = "a plugin without settings still starts and says what to write"
 file = "src/ams_mcp/cli.py"
 find = 'return AmsService\(Unconfigured\(str\(error\)\), timezone=local_timezone\(\)\)'
 replace = 'raise'
+
+[[rule]]
+name = "the reader is asked for one page at a time"
+file = "src/ams_mcp/reader.py"
+find = 'async with asyncio\.timeout_at\(deadline\), self\._turn:'
+replace = 'async with asyncio.timeout_at(deadline):'

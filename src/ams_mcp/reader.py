@@ -92,6 +92,9 @@ class HttpReader:
         self._base = f"http://{address}"
         self._transport, self._clock, self._wall = transport, clock, wall
         self._cache: dict[str, tuple[float, Page]] = {}
+        # The firmware's WebServer serves one client at a time (AmsWebServer.cpp,
+        # server.handleClient()), so a second connection waits or is refused.
+        self._turn = asyncio.Lock()
 
     async def page(self, name: str) -> Page:
         """The named page, read now or a moment ago."""
@@ -99,16 +102,23 @@ class HttpReader:
         if name not in PAGES:
             msg = f"{name!r} is not one of the pages this plugin may read"
             raise RefusedPageError(msg)
-        cached = self._cache.get(name)
-        if cached and self._clock() - cached[0] < CACHE_FOR:
-            return cached[1]
-        page = Page(await self._get(name), self._wall())
+        deadline = asyncio.get_running_loop().time() + TIMEOUT
+        try:
+            async with asyncio.timeout_at(deadline), self._turn:
+                # RULE: the reader is asked for one page at a time
+                cached = self._cache.get(name)
+                if cached and self._clock() - cached[0] < CACHE_FOR:
+                    return cached[1]
+                page = Page(await self._get(name, deadline), self._wall())
+        except TimeoutError as error:
+            msg = f"the reader did not answer: {name} waited its turn too long"
+            raise ReaderError(msg) from error
         self._cache[name] = (self._clock(), page)
         return page
 
-    async def _get(self, name: str) -> dict[str, Any]:
+    async def _get(self, name: str, deadline: float) -> dict[str, Any]:
         try:
-            response = await self._read(name)
+            response = await self._read(name, deadline)
         except (httpx.HTTPError, TimeoutError) as error:
             msg = f"the reader did not answer: {type(error).__name__}"
             raise ReaderError(msg) from error
@@ -126,10 +136,9 @@ class HttpReader:
             raise StrangeAnswerError(msg)
         return body
 
-    async def _read(self, name: str) -> httpx.Response:
-        """The page, asked for once more if the first try fails or hangs, all within TIMEOUT."""
-        now = asyncio.get_running_loop().time()
-        deadline, failure = now + TIMEOUT, None
+    async def _read(self, name: str, deadline: float) -> httpx.Response:
+        """The page, asked for once more if the first try fails or hangs, all by the deadline."""
+        now, failure = asyncio.get_running_loop().time(), None
         # RULE: a page is asked for at most twice
         for attempt in range(TRIES):
             limit = deadline if attempt else min(deadline, now + FIRST_TRY)
