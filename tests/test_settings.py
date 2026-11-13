@@ -53,7 +53,7 @@ def test_the_command_refuses_to_start_without_settings(tmp_path, capsys):
 
 def test_a_server_without_settings_answers_each_tool_with_what_to_write(tmp_path, capsys):
     missing = tmp_path / "config.toml"
-    service = cli.make_service(simulate=False, settings_file=str(missing), serving=True)
+    service = cli.make_service(simulate=None, settings_file=str(missing), serving=True)
     assert "There is no settings file" in capsys.readouterr().err
     for answer in (asyncio.run(service.now()), asyncio.run(service.history("month"))):
         assert answer["success"] is False
@@ -64,4 +64,4 @@ def test_a_server_without_settings_answers_each_tool_with_what_to_write(tmp_path
 
 def test_a_question_without_settings_still_stops(tmp_path):
     with pytest.raises(SettingsError):
-        cli.make_service(simulate=False, settings_file=str(tmp_path / "none.toml"), serving=False)
+        cli.make_service(simulate=None, settings_file=str(tmp_path / "none.toml"), serving=False)
