@@ -246,6 +246,7 @@ def _breaches(module: str, path: Path, package_dir: Path, names: set[str]) -> li
             # RULE: an import a layer may not use is a breach
             if layer(inside) not in ALLOWED[mine]:
                 found.append(f"{module} ({mine}) imports {name} ({layer(inside)})")
+        # RULE: only the reader layer may import httpx
         elif name.split(".")[0] in FORBIDDEN_OUTSIDE.get(mine, set()):
             found.append(f"{module} ({mine}) imports {name}")
     return found

@@ -194,3 +194,9 @@ name = "a killed run's temporary files are swept at the next start"
 file = "scripts/mutate.py"
 find = 'for left in MUTATE_TMP\.iterdir\(\) if MUTATE_TMP\.is_dir\(\) else \[\]:'
 replace = 'for left in []:'
+
+[[rule]]
+name = "only the reader layer may import httpx"
+file = "scripts/ratchet.py"
+find = 'elif name\.split\("\."\)\[0\] in FORBIDDEN_OUTSIDE\.get\(mine, set\(\)\):'
+replace = 'elif False:'

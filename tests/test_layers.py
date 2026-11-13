@@ -38,6 +38,11 @@ def _package(tmp_path, **modules):
     return package
 
 
+def _dir(path):
+    path.mkdir()
+    return path
+
+
 def test_every_module_has_a_layer_and_imports_only_what_its_layer_may():
     assert ratchet.layer_breaches(PACKAGE) == []
 
@@ -56,16 +61,25 @@ def test_every_module_in_the_package_is_on_the_map():
             "service (service) imports ams_mcp.server (top)",
         ),
         ("pages", "from ams_mcp import reader\n", "pages (core) imports ams_mcp.reader (reader)"),
-        ("pages", "import httpx\n", "pages (core) imports httpx"),
-        ("service", "import httpx\n", "service (service) imports httpx"),
-        ("server", "import httpx\n", "server (top) imports httpx"),
-        ("reader", "from mcp.types import ToolAnnotations\n", "reader (reader) imports mcp.types"),
     ],
 )
 def test_an_import_a_layer_may_not_use_is_a_breach(tmp_path, module, source, breach):
     breaches = ratchet.layer_breaches(_package(tmp_path, **{module: source}))
     assert breach in breaches
     assert all(b.startswith(f"{module} ") for b in breaches)
+
+
+@pytest.mark.parametrize("module", ["pages", "service", "server"])
+def test_only_the_reader_layer_may_import_httpx(tmp_path, module):
+    # Every request then passes the reader's one allow-list of pages.
+    breaches = ratchet.layer_breaches(_package(tmp_path, **{module: "import httpx\n"}))
+    assert breaches == [f"{module} ({ratchet.layer(module)}) imports httpx"]
+    assert ratchet.layer_breaches(_package(_dir(tmp_path / "ok"), reader="import httpx\n")) == []
+
+
+def test_mcp_stays_out_of_the_layers_below_the_top(tmp_path):
+    breaches = ratchet.layer_breaches(_package(tmp_path, reader="from mcp.types import ToolAnnotations\n"))
+    assert "reader (reader) imports mcp.types" in breaches
 
 
 def test_an_import_made_only_for_type_checking_still_counts(tmp_path):
