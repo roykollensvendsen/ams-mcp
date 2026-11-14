@@ -51,7 +51,7 @@ def test_a_run_that_was_killed_is_repaired_by_the_next_one(tmp_path, monkeypatch
     assert "repaired" in capsys.readouterr().out
 
 
-def test_a_coloured_failure_line_is_still_attributed(monkeypatch):
+def test_a_coloured_failure_line_is_still_attributed(tmp_path, monkeypatch):
     """Colour around FAILED hides it, and a kill nobody can attribute is wasted.
 
     Without this the runner reports every rule as killed by some other test,
@@ -68,6 +68,7 @@ def test_a_coloured_failure_line_is_still_attributed(monkeypatch):
         stderr = ""
 
     monkeypatch.setattr(mutate.subprocess, "run", lambda *_a, **_k: Result())
+    monkeypatch.setattr(mutate, "MUTATE_TMP", tmp_path / "mutate-tmp")  # never the real one
     count, failed = mutate.run_suite()
     assert count == 1
     assert failed == ["test_a_rule_holds"]
@@ -92,6 +93,9 @@ def test_two_mutations_never_share_a_bytecode_cache(tmp_path, monkeypatch):
     (project / "pkg" / "__init__.py").write_text("VALUE = 1\n")
     (project / "test_it.py").write_text("from pkg import VALUE\n\n\ndef test_it():\n    assert VALUE\n")
     monkeypatch.setattr(mutate, "ROOT", project)
+    # Its own folder, not the real MUTATE_TMP: while a mutation switches off the clean-up,
+    # a run there would be left in the folder the outer mutation run is using.
+    monkeypatch.setattr(mutate, "MUTATE_TMP", tmp_path / "mutate-tmp")
     mutate.run_suite()
     assert not list(project.rglob("__pycache__")), (
         "the suite wrote bytecode, so two equal-sized mutations can collide"
@@ -110,6 +114,9 @@ def test_an_empty_rule_table_is_not_a_crash(tmp_path, monkeypatch, capsys):
     table.write_text("# Every rule this project enforces, and the line that carries it.\n")
     monkeypatch.setattr(mutate, "TABLE", table)
     monkeypatch.setattr(mutate, "ROOT", tmp_path)
+    # main() sweeps MUTATE_TMP at start. Inside a mutation run the real one holds the
+    # outer run's --basetemp, and sweeping it pulls other tests' tmp_path from under them.
+    monkeypatch.setattr(mutate, "MUTATE_TMP", tmp_path / "mutate-tmp")
     monkeypatch.setattr("sys.argv", ["mutate.py"])
     assert mutate.main() == 0
     assert "no rules" in capsys.readouterr().out.lower()
