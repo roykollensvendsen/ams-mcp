@@ -21,6 +21,22 @@ def loaded():
     return module
 
 
+def isolated(mutate, tmp_path, monkeypatch, rows):
+    """Point everything main() touches at tmp_path, so it never meets a real run.
+
+    Each of these is set when the runner is loaded, so patching ROOT moves none of
+    them. main() repairs from RECOVERY first: inside a mutation run the real record
+    names the file being switched off, and a test reading it would put that file back.
+    """
+    monkeypatch.setattr(mutate, "ROOT", tmp_path)
+    monkeypatch.setattr(mutate, "ROWS", rows)
+    monkeypatch.setattr(mutate, "RECOVERY", tmp_path / "recovery.json")
+    # main() sweeps MUTATE_TMP at start. Inside a mutation run the real one holds the
+    # outer run's --basetemp, and sweeping it pulls other tests' tmp_path from under them.
+    monkeypatch.setattr(mutate, "MUTATE_TMP", tmp_path / "mutate-tmp")
+    monkeypatch.setattr("sys.argv", ["mutate.py"])
+
+
 def test_a_file_untouched_since_the_mutation_is_put_back(tmp_path):
     mutate = loaded()
     source = tmp_path / "rule.py"
@@ -113,12 +129,7 @@ def test_an_empty_rule_table_is_not_a_crash(tmp_path, monkeypatch, capsys):
     rows = tmp_path / "mutations"
     rows.mkdir()
     (rows / "README.md").write_text("# One row per rule\n")
-    monkeypatch.setattr(mutate, "ROWS", rows)
-    monkeypatch.setattr(mutate, "ROOT", tmp_path)
-    # main() sweeps MUTATE_TMP at start. Inside a mutation run the real one holds the
-    # outer run's --basetemp, and sweeping it pulls other tests' tmp_path from under them.
-    monkeypatch.setattr(mutate, "MUTATE_TMP", tmp_path / "mutate-tmp")
-    monkeypatch.setattr("sys.argv", ["mutate.py"])
+    isolated(mutate, tmp_path, monkeypatch, rows)
     assert mutate.main() == 0
     assert "no rules" in capsys.readouterr().out.lower()
 
@@ -130,10 +141,7 @@ def test_no_rows_when_rules_are_marked_is_a_failure(tmp_path, monkeypatch, capsy
     (tmp_path / "src" / "pkg" / "core.py").write_text("# RULE: a rule with no row\nx = 1\n")
     rows = tmp_path / "mutations"
     rows.mkdir()
-    monkeypatch.setattr(mutate, "ROOT", tmp_path)
-    monkeypatch.setattr(mutate, "ROWS", rows)
-    monkeypatch.setattr(mutate, "MUTATE_TMP", tmp_path / "mutate-tmp")
-    monkeypatch.setattr("sys.argv", ["mutate.py"])
+    isolated(mutate, tmp_path, monkeypatch, rows)
     assert mutate.main() == 1
     said = capsys.readouterr().out
     assert "1 rule is marked" in said
