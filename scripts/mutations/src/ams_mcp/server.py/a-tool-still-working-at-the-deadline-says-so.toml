@@ -1,0 +1,5 @@
+[[rule]]
+name = "a tool still working at the deadline says so"
+file = "src/ams_mcp/server.py"
+find = 'answer = await asyncio\.wait_for\(tool\(\*args, \*\*kwargs\), ANSWER_WITHIN\)'
+replace = 'answer = await tool(*args, **kwargs)'

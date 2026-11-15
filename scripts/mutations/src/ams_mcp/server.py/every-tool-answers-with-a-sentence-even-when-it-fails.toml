@@ -1,0 +1,5 @@
+[[rule]]
+name = "every tool answers with a sentence, even when it fails"
+file = "src/ams_mcp/server.py"
+find = 'answer = \{"success": False, "say": BROKE\.format\(question=_question\(tool\.__name__\)\)\}'
+replace = 'raise'

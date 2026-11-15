@@ -1,0 +1,5 @@
+[[rule]]
+name = "the reader is asked for one page at a time"
+file = "src/ams_mcp/reader.py"
+find = 'async with self\._turn:'
+replace = 'if True:'

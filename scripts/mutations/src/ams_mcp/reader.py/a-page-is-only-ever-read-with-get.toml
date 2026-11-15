@@ -1,0 +1,5 @@
+[[rule]]
+name = "a page is only ever read with get"
+file = "src/ams_mcp/reader.py"
+find = 'return await client\.get\(f"\{self\._base\}/\{name\}"\)'
+replace = 'return await client.post(f"{self._base}/{name}")'

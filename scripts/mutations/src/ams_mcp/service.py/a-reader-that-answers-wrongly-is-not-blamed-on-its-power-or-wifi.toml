@@ -1,0 +1,5 @@
+[[rule]]
+name = "a reader that answers wrongly is not blamed on its power or wifi"
+file = "src/ams_mcp/service.py"
+find = 'except StrangeAnswerError as error:'
+replace = 'except ZeroDivisionError as error:'

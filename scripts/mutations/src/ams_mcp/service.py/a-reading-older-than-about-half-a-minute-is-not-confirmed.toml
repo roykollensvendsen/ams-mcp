@@ -1,0 +1,5 @@
+[[rule]]
+name = "a reading older than about half a minute is not confirmed"
+file = "src/ams_mcp/service.py"
+find = 'if age > STALE_AFTER:'
+replace = 'if False:'

@@ -1,0 +1,5 @@
+[[rule]]
+name = "the address is a bare host, so no other page can be reached through it"
+file = "src/ams_mcp/settings.py"
+find = 'if not isinstance\(address, str\) or not _ADDRESS\.fullmatch\(address\):'
+replace = 'if not isinstance(address, str):'
