@@ -33,9 +33,12 @@ def _mutate():
     return module
 
 
-def marked_rules() -> set[str]:
+def marked_rules(mutate=None) -> set[str]:
     """Every rule the source marks, by the words the marker gives it."""
-    return _mutate().marked_rules()
+    found = (mutate or _mutate()).marked_rules()
+    # A scanner broken to find nothing, with the rows gone as well, would pass every check here.
+    assert found, "no RULE markers found; the scanner or the source is broken"
+    return found
 
 
 def rowed_rules() -> set[str]:
@@ -166,15 +169,99 @@ def test_a_rule_in_any_script_is_read(tmp_path):
     assert _mutate().marked_rules(tmp_path) == {"a rule in the product", "a rule in a new tool"}
 
 
-def test_no_rule_sits_inside_repair():
-    """repair() puts back a file a killed run left switched off, before anything else runs.
+UNPROVABLE = "repair"
 
-    A rule inside it would be proven by running the switched-off repair, so the
-    proof would repair nothing. Keep rules out of it.
+REPAIR_WITH_A_RULE = """
+def repair():
+    \"\"\"Put back a file a killed run left mutated.\"\"\"
+    # RULE: a repaired file is the original
+    if kept:
+        write(kept)
+
+
+def sweep():
+    # RULE: a swept folder is gone
+    remove()
+"""
+
+REPAIR_CALLING_A_RULE = """
+def write(kept):
+    # RULE: a repaired file is written whole
+    path.write_text(kept)
+
+
+def repair():
+    write(kept)
+"""
+
+
+def _inside_repair(text, rows, mutate):
+    """The rules marked, or switched off by a row, in repair() or any function it calls by name.
+
+    repair() puts back a file a killed run left switched off, and it runs from that
+    switched-off file. A rule there would be proven by running the broken repair, so
+    the proof would repair nothing. A helper it calls in the same file runs broken too.
     """
-    source = (ROOT / "scripts" / "mutate.py").read_text()
-    [repair] = [
-        n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef) and n.name == "repair"
+    defs = (ast.FunctionDef, ast.AsyncFunctionDef)
+    functions = {f.name: f for f in ast.parse(text).body if isinstance(f, defs)}
+    assert UNPROVABLE in functions, (
+        f"no {UNPROVABLE}() in the runner; if it was renamed, rename UNPROVABLE too"
+    )
+    reached, waiting = set(), [UNPROVABLE]
+    while waiting:  # repair() and everything it calls, however deep, within this file
+        name = waiting.pop()
+        reached.add(name)
+        called = {
+            c.func.id
+            for c in ast.walk(functions[name])
+            if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
+        }
+        waiting += [c for c in called if c in functions and c not in reached]
+    lines = text.splitlines()
+    inside = {i for name in reached for i in range(functions[name].lineno - 1, functions[name].end_lineno)}
+    marked = [m.group(1) for i in sorted(inside) if (m := MARKER.search(lines[i]))]
+    rowed = [
+        r["name"] for r in rows if mutate.line_of(text, r["find"], int(r.get("occurrence", 1))) in inside
     ]
-    inside = source.splitlines()[repair.lineno - 1 : repair.end_lineno]
-    assert not [line for line in inside if MARKER.search(line)]
+    return sorted(set(marked + rowed))
+
+
+def test_no_rule_lives_inside_repair():
+    """Neither a marker nor a row's line may sit in repair() or what it calls."""
+    mutate = _mutate()
+    text = (ROOT / "scripts/mutate.py").read_text(encoding="utf-8")
+    rows = [r for r in mutate.all_rows() if r["file"] == "scripts/mutate.py"]
+    assert rows, "the runner's own rows are missing"
+    assert _inside_repair(text, rows, mutate) == []
+
+
+def test_a_rule_inside_repair_is_found():
+    """The guard is only worth something if it sees a rule where one has been put."""
+    rows = [
+        {"name": "a swept folder is gone", "find": r"^\s*remove\(\)$"},
+        {"name": "kept", "find": r"if kept:"},
+    ]
+    assert _inside_repair(REPAIR_WITH_A_RULE, rows, _mutate()) == ["a repaired file is the original", "kept"]
+
+
+def test_a_rule_in_what_repair_calls_is_found():
+    """A helper repair() calls runs switched off too, so its rule cannot be proven either."""
+    assert _inside_repair(REPAIR_CALLING_A_RULE, [], _mutate()) == ["a repaired file is written whole"]
+
+
+def test_a_runner_with_no_repair_is_refused_by_name():
+    """Renamed, repair() would leave the guard checking nothing; it says what it looked for."""
+    with pytest.raises(AssertionError, match=r"no repair\(\) in the runner"):
+        _inside_repair("def mend():\n    pass\n", [], _mutate())
+
+
+def test_a_scan_that_finds_no_rule_fails():
+    """With the scanner broken and the rows gone, every other check here would pass."""
+
+    class FindsNothing:
+        @staticmethod
+        def marked_rules():
+            return set()
+
+    with pytest.raises(AssertionError, match="no RULE markers found"):
+        marked_rules(FindsNothing())
