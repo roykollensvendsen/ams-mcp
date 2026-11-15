@@ -56,6 +56,9 @@ RECOVERY = ROOT / "scripts/.mutate-recovery.json"
 MUTATE_TMP = pathlib.Path(tempfile.gettempdir()) / (
     "ams-mcp-mutate-" + hashlib.sha256(str(ROOT).encode()).hexdigest()[:8]
 )
+#: The package the suite measures. Never imported here: this process's import says
+#: nothing about where the suite's interpreter finds it.
+PACKAGE = "ams_mcp"
 
 
 def test_name_for(rule: str) -> str:
@@ -322,6 +325,35 @@ def recover() -> None:
     sweep()
 
 
+def own_code(env: dict[str, str]) -> None:
+    """Stop, naming both places, unless the suite would load the package from this checkout.
+
+    Two worktrees that share one environment install the package from whichever ran
+    `uv sync` last. A run here would then switch a rule off in this checkout while the
+    tests load the other one's code, and every rule would look unguarded. So the
+    interpreter that runs the suite is asked where the package comes from, in a process
+    of its own with the suite's environment.
+    """
+    source = (ROOT / "src").resolve()
+    ask = f"import {PACKAGE}; print({PACKAGE}.__file__)"
+    asked = subprocess.run(  # noqa: S603 - this interpreter, asked one fixed question
+        [sys.executable, "-c", ask], cwd=ROOT, env=env, capture_output=True, text=True, check=False
+    )
+    if asked.returncode:
+        msg = f"{sys.executable} cannot import {PACKAGE}:\n{asked.stderr[-1000:]}"
+        msg += f"Run `uv sync` in {ROOT}, then run this again."
+        raise SystemExit(msg)
+    found = pathlib.Path(asked.stdout.strip()).resolve()
+    # RULE: a mutation run measures only this checkout's own code
+    if not found.is_relative_to(source):
+        msg = (
+            f"The tests would load {PACKAGE} from {found.parent}, not from {source}: another"
+            f" checkout's environment is in the way. Run `uv sync` in {ROOT}, with VIRTUAL_ENV"
+            " and UV_PROJECT_ENVIRONMENT unset, so it has an environment of its own; then run this again."
+        )
+        raise SystemExit(msg)
+
+
 def run_suite() -> tuple[int, list[str]]:
     """Run the tests and give back how many failed, and which ones."""
     # Two mutations that replace equal-length text leave files of identical
@@ -422,6 +454,7 @@ def _mutate_all(args: argparse.Namespace) -> int:
     rules = all_rows()
     if not rules:
         return _no_rows()
+    own_code({**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})  # what run_suite passes
     results = []
     lost: list[str] = []
     standing: tuple[pathlib.Path, str, str] | None = None

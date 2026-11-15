@@ -65,6 +65,10 @@ RATCHET_TMP = Path(tempfile.gettempdir()) / (
 )
 SOURCE = ROOT / "src"
 PACKAGE = SOURCE / "ams_mcp"
+#: How a step reaches the tree's own interpreter. Its package is asked for through it,
+#: never imported here: the ratchet runs a pull request's copy of this script in the
+#: base's environment, where this process's import would answer for the wrong tree.
+PYTHON = ("uv", "run", "python")
 COVERAGE_WOBBLE = 0.5  # percentage points: coverage differs slightly between machines and versions
 HIGHER = ("coverage", "mutation", "tests")
 LOWER = ("lint_errors", "type_errors", "cycles", "layer_violations", "duplication")
@@ -525,8 +529,32 @@ def copy_of(ref: str, copy: Path) -> None:
             raise SystemExit(msg)
 
 
+def own_code() -> None:
+    """Stop, naming both places, unless the tree's interpreter loads the package from its own src/.
+
+    An environment shared with another worktree holds whichever checkout last ran
+    `uv sync`, and the suite would then measure that one's code, not this tree's.
+    The base's copy is asked too, since it is measured by this same function.
+    """
+    source = SOURCE.resolve()
+    asked = _run(*PYTHON, "-c", f"import {PACKAGE.name}; print({PACKAGE.name}.__file__)", cwd=ROOT)
+    if asked.returncode:
+        msg = f"The tests in {ROOT} cannot import {PACKAGE.name}:\n{asked.stderr[-1000:]}Run `uv sync` there."
+        raise SystemExit(msg)
+    found = Path(asked.stdout.strip()).resolve()
+    # RULE: the ratchet measures only the code of the tree it measures
+    if not found.is_relative_to(source):
+        msg = (
+            f"The tests would load {PACKAGE.name} from {found.parent}, not from {source}: another"
+            f" checkout's environment is in the way. Run `uv sync` in {ROOT}, with VIRTUAL_ENV"
+            " and UV_PROJECT_ENVIRONMENT unset, so it has an environment of its own; then run this again."
+        )
+        raise SystemExit(msg)
+
+
 def measure(*, skip_mutation: bool = False, recorded: dict[str, Any] | None = None) -> dict[str, Any]:
     """Every measure, from the tree as it is."""
+    own_code()
     with tempfile.TemporaryDirectory() as tmp:
         report = Path(tmp) / "coverage.json"
         started = time.monotonic()
