@@ -1,0 +1,5 @@
+[[rule]]
+name = "a ratchet run that is still starting is never swept"
+file = "scripts/ratchet.py"
+find = '^\s*if starting and young:$'
+replace = 'if False:'

@@ -31,12 +31,14 @@ from __future__ import annotations
 import argparse
 import ast
 import contextlib
+import fcntl
 import hashlib
 import json
 import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -51,8 +53,13 @@ if TYPE_CHECKING:
 ROOT = Path(os.environ.get("RATCHET_ROOT") or Path(__file__).resolve().parent.parent)
 FILE = ROOT / "quality.json"
 #: Where each run keeps everything it and its commands make: the copy of the base, its
-#: install, every pytest folder. One folder per run, named by its process, removed when
+#: install, every pytest folder. One folder per run, locked while it runs, removed when
 #: the run ends. Named after this script's checkout, so two checkouts never meet here.
+#: The file in a run's folder that the run holds a lock on for as long as it lives.
+LOCK = ".lock"
+#: How long a folder with no lock may still be a run getting started. A guess: a
+#: start takes milliseconds, and a run that has not locked within an hour never will.
+STARTING_SECONDS = 3600
 RATCHET_TMP = Path(tempfile.gettempdir()) / (
     "ams-mcp-ratchet-" + hashlib.sha256(str(Path(__file__).resolve()).encode()).hexdigest()[:8]
 )
@@ -312,18 +319,62 @@ def _run(
     return subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True, check=False)  # noqa: S603
 
 
+#: The rights of a folder only its owner may enter.
+PRIVATE = 0o700
+
+
+def _ignore(signals: list[signal.Signals]) -> None:
+    """Ignore these signals until the clean-up under way has finished."""
+    for s in signals:
+        signal.signal(s, signal.SIG_IGN)
+
+
+def _private_folder(path: Path) -> None:
+    """Make `path` a folder only this user can enter, or refuse it.
+
+    Its name in the shared temporary folder is fixed, so anyone could have made it
+    first, or put a link there. It is opened once, never through a link, and checked
+    and tightened through that handle: by name, a link swapped in between the check
+    and the change would be followed. A folder of ours that others could only read is
+    just tightened, since nobody else could have put anything in it.
+    """
+    refused = (
+        f"{path} is not a folder of this user's alone: a link, someone else's, or open to"
+        " others to write in. Look at what it is, remove it, and run again."
+    )
+    with contextlib.suppress(FileExistsError):
+        path.mkdir(mode=PRIVATE)
+    try:
+        # RULE: a link in place of the ratchet folder is refused
+        handle = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as error:
+        raise SystemExit(refused) from error
+    try:
+        found = os.fstat(handle)
+        # RULE: a ratchet folder that is not ours alone is refused
+        if found.st_uid != os.getuid() or found.st_mode & 0o022:
+            raise SystemExit(refused)
+        os.fchmod(handle, PRIVATE)
+    finally:
+        os.close(handle)
+
+
 @contextlib.contextmanager
 def stopped_cleanly() -> Iterator[None]:
-    """Let SIGTERM or SIGHUP unwind like Ctrl-C does, so every `finally` runs.
+    """Let SIGTERM or SIGHUP unwind like Ctrl-C does, so every `finally` runs, and a second stop waits.
 
     A timeout, a cancelled job or a closed terminal sends one of them, and by
     default Python stops at once, leaving the copy of the base and its install.
     """
+    signals = [signal.SIGINT, signal.SIGTERM, *([signal.SIGHUP] if hasattr(signal, "SIGHUP") else [])]
 
     def stop(signum: int, _frame: object) -> None:
+        # RULE: a second stop does not cut a ratchet's clean-up short
+        _ignore(signals)
+        if signum == signal.SIGINT:
+            raise KeyboardInterrupt
         raise SystemExit(128 + signum)
 
-    signals = [signal.SIGTERM, *([signal.SIGHUP] if hasattr(signal, "SIGHUP") else [])]
     # RULE: a stopped ratchet run cleans up as an interrupted one does
     before = {s: signal.signal(s, stop) for s in signals}
     try:
@@ -353,38 +404,59 @@ def _remove(folder: Path) -> None:
     shutil.rmtree(folder, onexc=_writable_again)
 
 
-def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+def _ours(path: Path) -> bool:
+    """A real folder of this user's: never a link, and never somebody else's."""
+    found = path.lstat()
+    # RULE: a link in the ratchet folder is never followed
+    return stat.S_ISDIR(found.st_mode) and found.st_uid == os.getuid()
+
+
+def _dead(path: Path) -> bool:
+    """Whether `path` is the folder of a run that has ended, so nobody's lock is on it."""
+    named, starting = path.name.startswith("run-"), path.name.startswith("starting-")
+    if not (named or starting) or not _ours(path):
         return False
-    except PermissionError:
-        return True
+    young = time.time() - path.lstat().st_mtime < STARTING_SECONDS
+    # RULE: a ratchet run that is still starting is never swept
+    if starting and young:
+        return False  # it may be making its lock right now
+    try:
+        lock = os.open(path / LOCK, os.O_RDWR | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return not young  # a name just claimed, or a run killed before it locked
+    except OSError:
+        return False
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False  # a run still going holds it
+    finally:
+        os.close(lock)
     return True
 
 
 def sweep() -> None:
-    """Remove what an earlier run, killed before it could clean up, left behind."""
-    swept = False
-    for left in sorted(RATCHET_TMP.glob("run-*")) if RATCHET_TMP.is_dir() else []:
-        pid = left.name.split("-")[1]
+    """Remove what earlier runs, killed before they could clean up, left; never a live run's."""
+    for path in sorted(RATCHET_TMP.iterdir()) if RATCHET_TMP.is_dir() else []:
         # RULE: a running ratchet's folder is never swept
-        if pid.isdigit() and _alive(int(pid)):
+        if not _dead(path):
             continue
         # RULE: a killed ratchet run's folder is swept at the next start
-        _remove(left)
-        swept = True
-    if swept:
-        # The copy of the base was a git worktree; git still lists it until told it is gone.
-        _run("git", "worktree", "prune")
+        _remove(path)
 
 
 @contextlib.contextmanager
 def run_folder() -> Iterator[Path]:
-    """A folder for this run, which every command it starts uses as its temporary folder."""
+    """A folder for this run, locked while it lives, and the temporary folder of every command it starts."""
+    _private_folder(RATCHET_TMP)
     sweep()
-    RATCHET_TMP.mkdir(parents=True, exist_ok=True)
-    folder = Path(tempfile.mkdtemp(prefix=f"run-{os.getpid()}-", dir=RATCHET_TMP))
+    # Locked under a name the sweep leaves alone, then renamed: a sweep in between sees it locked.
+    starting = Path(tempfile.mkdtemp(prefix="starting-", dir=RATCHET_TMP))
+    lock = os.open(starting / LOCK, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    # RULE: a ratchet run holds its folder's lock until it ends
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    folder = Path(tempfile.mkdtemp(prefix="run-", dir=RATCHET_TMP))  # claims a name no other run has
+    starting.rename(folder)
     before = os.environ.get("TMPDIR"), tempfile.tempdir
     # RULE: a ratchet run's commands keep their temporary files in its folder
     os.environ["TMPDIR"] = str(folder)
@@ -398,8 +470,33 @@ def run_folder() -> Iterator[Path]:
             os.environ["TMPDIR"] = before[0]
         tempfile.tempdir = before[1]
         _remove(folder)
+        os.close(lock)
         with contextlib.suppress(OSError):
             RATCHET_TMP.rmdir()
+
+
+def copy_of(ref: str, copy: Path) -> None:
+    """Check `ref` out into `copy`, a repository holding that one commit and no other ref.
+
+    A worktree would share every branch of this clone, and a killed run would leave
+    an entry in it that only a prune of the whole clone removes. As weather-mcp does it.
+    """
+    sha = _run("git", "rev-parse", "--verify", f"{ref}^{{commit}}", cwd=ROOT)
+    if sha.returncode:
+        msg = f"Cannot find {ref} to measure it:\n{sha.stderr}"
+        raise SystemExit(msg)
+    copy.mkdir(parents=True)
+    # RULE: the base is measured where no other branch can be seen
+    steps = (
+        ("git", "init", "-q"),
+        ("git", "fetch", "-q", "--depth", "1", str(ROOT), sha.stdout.strip()),
+        ("git", "checkout", "-q", "--detach", "FETCH_HEAD"),
+    )
+    for step in steps:
+        done = _run(*step, cwd=copy)
+        if done.returncode:
+            msg = f"Cannot check out {ref} to measure it:\n{done.stderr}"
+            raise SystemExit(msg)
 
 
 def measure(*, skip_mutation: bool = False, recorded: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -408,7 +505,15 @@ def measure(*, skip_mutation: bool = False, recorded: dict[str, Any] | None = No
         report = Path(tmp) / "coverage.json"
         started = time.monotonic()
         suite = _run(
-            "uv", "run", "pytest", "-q", "-p", "no:cacheprovider", "--cov", f"--cov-report=json:{report}"
+            "uv",
+            "run",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            f"--basetemp={Path(tmp) / 'pytest'}",
+            "--cov",
+            f"--cov-report=json:{report}",
         )
         seconds = round(time.monotonic() - started, 1)
         if suite.returncode:
@@ -531,24 +636,18 @@ def measure_at(ref: str) -> dict[str, Any]:
     """
     with tempfile.TemporaryDirectory() as tmp:
         copy, out = Path(tmp) / "base", Path(tmp) / "levels.json"
-        added = _run("git", "worktree", "add", "--detach", str(copy), ref)
-        if added.returncode:
-            msg = f"Cannot check out {ref} to measure it:\n{added.stderr}"
+        copy_of(ref, copy)
+        synced = _run("uv", "sync", "--locked", "--all-extras", cwd=copy)
+        if synced.returncode:
+            msg = f"Cannot install {ref} to measure it:\n{synced.stderr[-2000:]}"
             raise SystemExit(msg)
-        try:
-            synced = _run("uv", "sync", "--locked", "--all-extras", cwd=copy)
-            if synced.returncode:
-                msg = f"Cannot install {ref} to measure it:\n{synced.stderr[-2000:]}"
-                raise SystemExit(msg)
-            env = {**os.environ, "RATCHET_ROOT": str(copy)}
-            here = str(Path(__file__).resolve())
-            measured = _run("uv", "run", "python", here, "measure", "--out", str(out), cwd=copy, env=env)
-            if measured.returncode:
-                msg = f"Measuring {ref} failed:\n{measured.stdout[-2000:]}{measured.stderr[-2000:]}"
-                raise SystemExit(msg)
-            return dict(json.loads(out.read_text()))
-        finally:
-            _run("git", "worktree", "remove", "--force", str(copy))
+        env = {**os.environ, "RATCHET_ROOT": str(copy)}
+        here = str(Path(__file__).resolve())
+        measured = _run("uv", "run", "python", here, "measure", "--out", str(out), cwd=copy, env=env)
+        if measured.returncode:
+            msg = f"Measuring {ref} failed:\n{measured.stdout[-2000:]}{measured.stderr[-2000:]}"
+            raise SystemExit(msg)
+        return dict(json.loads(out.read_text()))
 
 
 def main() -> int:

@@ -1,0 +1,5 @@
+[[rule]]
+name = "a link in place of the runs' folder is refused"
+file = "scripts/mutate.py"
+find = '^\s*handle = os\.open\(path, os\.O_RDONLY \| os\.O_DIRECTORY \| os\.O_NOFOLLOW\)$'
+replace = 'handle = os.open(path, os.O_RDONLY | os.O_DIRECTORY)'

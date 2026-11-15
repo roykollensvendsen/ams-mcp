@@ -8,6 +8,7 @@ as a timeout or a closed terminal does. A run killed outright is swept at the ne
 start. These tests point the temporary folder at their own, and look at what is left.
 """
 
+import fcntl
 import importlib.util
 import os
 import pathlib
@@ -150,28 +151,189 @@ def test_a_stopped_ratchet_run_cleans_up_as_an_interrupted_one_does(tmp_path):
     assert (code, list(tmp.iterdir())) == (128 + signal.SIGTERM, [])
 
 
-def _a_dead_pid():
-    gone = subprocess.Popen([sys.executable, "-c", "pass"])
-    gone.wait()
-    return gone.pid
+def _a_run_folder(ratchet, name, *, held):
+    """A run's folder with its lock file, and the lock held when the run is still going."""
+    folder = ratchet.RATCHET_TMP / name
+    folder.mkdir(parents=True)
+    lock = os.open(folder / ratchet.LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    if held:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+    else:
+        os.close(lock)
+    return folder, lock
 
 
 def test_a_killed_ratchet_run_s_folder_is_swept_at_the_next_start(tmp_path, monkeypatch):
     ratchet = _ratchet(tmp_path / "tmp", monkeypatch)
-    left = ratchet.RATCHET_TMP / f"run-{_a_dead_pid()}-abc"
-    (left / "shut").mkdir(parents=True)
+    left, _ = _a_run_folder(ratchet, "run-abc", held=False)
+    (left / "shut").mkdir()
     (left / "shut" / "inside.txt").write_text("x")
     (left / "shut").chmod(0)
-    pruned = []
+    pruned = []  # the base is a repository of its own now, so no git command is needed
     monkeypatch.setattr(ratchet, "_run", lambda *command, **_: pruned.append(command))
     ratchet.sweep()
-    assert (left.exists(), pruned) == (False, [("git", "worktree", "prune")])
+    assert (left.exists(), pruned) == (False, [])
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows has no flock")
 def test_a_running_ratchet_s_folder_is_never_swept(tmp_path, monkeypatch):
-    """Two ratchets in one checkout share the folder; neither takes the other's."""
+    """Two ratchets in one checkout share the folder; neither takes one whose lock is held."""
     ratchet = _ratchet(tmp_path / "tmp", monkeypatch)
-    running = ratchet.RATCHET_TMP / f"run-{os.getpid()}-abc"
-    running.mkdir(parents=True)
+    running, lock = _a_run_folder(ratchet, "run-abc", held=True)
+    try:
+        ratchet.sweep()
+        assert running.exists()
+    finally:
+        os.close(lock)
+
+
+def test_a_ratchet_run_that_is_still_starting_is_never_swept(tmp_path, monkeypatch):
+    """A new folder is locked before it takes a run's name; until an hour old, it may be mid-way."""
+    ratchet = _ratchet(tmp_path / "tmp", monkeypatch)
+    young = ratchet.RATCHET_TMP / "starting-abc"
+    old = ratchet.RATCHET_TMP / "starting-old"
+    young.mkdir(parents=True)
+    old.mkdir()
+    an_hour_ago = time.time() - ratchet.STARTING_SECONDS - 1
+    os.utime(old, (an_hour_ago, an_hour_ago))
+    monkeypatch.setattr(ratchet, "_run", lambda *_, **__: None)
     ratchet.sweep()
-    assert running.exists()
+    assert (young.exists(), old.exists()) == (True, False)
+
+
+def test_a_ratchet_run_holds_its_folder_s_lock_until_it_ends(tmp_path, monkeypatch):
+    ratchet = _ratchet(tmp_path / "tmp", monkeypatch)
+    with ratchet.run_folder() as folder:
+        theirs = os.open(folder / ratchet.LOCK, os.O_RDWR)
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(theirs, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.close(theirs)
+    assert not folder.exists()
+
+
+def test_a_link_in_the_ratchet_folder_is_never_followed(tmp_path, monkeypatch):
+    """Only a real folder of this user's is swept; a link named like a run is left, and so is its target."""
+    ratchet = _ratchet(tmp_path / "tmp", monkeypatch)
+    outside = tmp_path / "outside"
+    (outside / "kept").mkdir(parents=True)
+    (outside / "kept").chmod(0o755)
+    (outside / ratchet.LOCK).write_text("")
+    ratchet.RATCHET_TMP.mkdir(mode=0o700)
+    (ratchet.RATCHET_TMP / "run-planted").symlink_to(outside)
+    ratchet.sweep()
+    assert (ratchet.RATCHET_TMP / "run-planted").is_symlink()
+    assert (outside / "kept").stat().st_mode & 0o777 == 0o755
+
+
+def test_a_ratchet_folder_that_is_not_ours_alone_is_refused(tmp_path, monkeypatch):
+    """It has a fixed name in the shared /tmp, so anyone could have made it first."""
+    ratchet = _ratchet(tmp_path / "tmp", monkeypatch)
+    ratchet.RATCHET_TMP.mkdir()
+    ratchet.RATCHET_TMP.chmod(0o777)
+    with pytest.raises(SystemExit, match="not a folder of this user's alone"), ratchet.run_folder():
+        pass
+
+
+def _a_link_in_place_of(folder, tmp_path):
+    """A link where the folder should be, to a private folder of ours that would pass every other check."""
+    (tmp_path / "elsewhere").mkdir(mode=0o700)
+    folder.symlink_to(tmp_path / "elsewhere")
+
+
+def test_a_link_in_place_of_the_ratchet_folder_is_refused(tmp_path, monkeypatch):
+    ratchet = _ratchet(tmp_path / "tmp", monkeypatch)
+    _a_link_in_place_of(ratchet.RATCHET_TMP, tmp_path)
+    with pytest.raises(SystemExit, match="not a folder of this user's alone"), ratchet.run_folder():
+        pass
+
+
+def test_a_link_in_place_of_the_runs_folder_is_refused(tmp_path, monkeypatch):
+    project = _project(tmp_path, LEAKY_TEST)
+    mutate = _load(project / "scripts/mutate.py", "mutate_link", tmp_path / "tmp", monkeypatch)
+    _a_link_in_place_of(mutate.MUTATE_TMP, tmp_path)
+    with pytest.raises(SystemExit, match="not a folder of this user's alone"):
+        mutate.run_suite()
+
+
+def test_a_shared_folder_for_runs_that_is_not_ours_alone_is_refused(tmp_path, monkeypatch):
+    project = _project(tmp_path, LEAKY_TEST)
+    mutate = _load(project / "scripts/mutate.py", "mutate_open", tmp_path / "tmp", monkeypatch)
+    mutate.MUTATE_TMP.mkdir()
+    mutate.MUTATE_TMP.chmod(0o777)
+    with pytest.raises(SystemExit, match="not a folder of this user's alone"):
+        mutate.run_suite()
+
+
+def _a_second_stop_waits(script, tmp_path, monkeypatch):
+    """Once a stop is under way, a second one (Ctrl-C, then a timeout's SIGTERM) waits until it is done."""
+    module = _load(ROOT / f"scripts/{script}.py", f"{script}_twice", tmp_path / "tmp", monkeypatch)
+    before = signal.getsignal(signal.SIGTERM)
+    with module.stopped_cleanly():
+        with pytest.raises(KeyboardInterrupt):  # Ctrl-C, as the handler Python runs for it sees it
+            signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
+        assert signal.getsignal(signal.SIGTERM) == signal.SIG_IGN
+    assert signal.getsignal(signal.SIGTERM) == before
+
+
+def test_a_second_stop_does_not_cut_the_clean_up_short(tmp_path, monkeypatch):
+    _a_second_stop_waits("mutate", tmp_path, monkeypatch)
+
+
+def test_a_second_stop_does_not_cut_a_ratchet_s_clean_up_short(tmp_path, monkeypatch):
+    _a_second_stop_waits("ratchet", tmp_path, monkeypatch)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows has no SIGTERM to send")
+def test_ctrl_c_then_a_stop_still_cleans_up(tmp_path):
+    started, tmp = tmp_path / "started", tmp_path / "tmp"
+    tmp.mkdir()
+    project = _project(tmp_path, SLOW_TEST.format(started=str(started)))
+    run = subprocess.Popen(
+        [sys.executable, "scripts/mutate.py"], cwd=project, env={**os.environ, "TMPDIR": str(tmp)}
+    )
+    deadline = time.monotonic() + 30
+    while not started.exists():
+        assert run.poll() is None, "the run ended before it got going"
+        assert time.monotonic() < deadline, "the run never got going"
+        time.sleep(0.05)
+    run.send_signal(signal.SIGINT)
+    run.send_signal(signal.SIGTERM)
+    assert run.wait(timeout=30) != 0
+    assert list(tmp.iterdir()) == []
+    assert (project / "src/x.py").read_text() == "# RULE: the value is one\nvalue = 1\n"
+
+
+def test_the_base_is_measured_where_no_other_branch_can_be_seen(tmp_path, monkeypatch):
+    """A worktree shares every branch of this clone; a one-commit copy needs no cleaning in it after."""
+    ratchet = _ratchet(tmp_path / "tmp", monkeypatch)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+    for args in (
+        ["init", "-q", "-b", "main"],
+        ["config", "user.email", "t@example.org"],
+        ["config", "user.name", "t"],
+    ):
+        git(*args)
+    (repo / "notes.txt").write_text("main\n")
+    git("add", "notes.txt")
+    git("commit", "-q", "-m", "main")
+    git("switch", "-q", "-c", "under-review")
+    (repo / "notes.txt").write_text("under review\n")
+    git("commit", "-q", "-am", "under review")
+    git("switch", "-q", "main")
+    monkeypatch.setattr(ratchet, "ROOT", repo)
+    copy = tmp_path / "base"
+    ratchet.copy_of("main", copy)
+    seen = subprocess.run(
+        ["git", "log", "--all", "--format=%s"],
+        cwd=copy,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert (copy / "notes.txt").read_text() == "main\n"
+    assert "under review" not in seen

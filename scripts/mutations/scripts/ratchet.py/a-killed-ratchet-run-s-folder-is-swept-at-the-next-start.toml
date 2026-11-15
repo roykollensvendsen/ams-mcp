@@ -1,5 +1,5 @@
 [[rule]]
 name = "a killed ratchet run's folder is swept at the next start"
 file = "scripts/ratchet.py"
-find = '^\s*_remove\(left\)$'
+find = '^\s*_remove\(path\)$'
 replace = 'pass'

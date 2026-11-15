@@ -1,0 +1,5 @@
+[[rule]]
+name = "a ratchet run holds its folder's lock until it ends"
+file = "scripts/ratchet.py"
+find = '^\s*fcntl\.flock\(lock, fcntl\.LOCK_EX\)$'
+replace = 'pass'

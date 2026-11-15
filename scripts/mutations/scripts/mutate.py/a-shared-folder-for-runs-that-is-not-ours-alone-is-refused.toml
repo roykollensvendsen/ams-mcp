@@ -1,0 +1,5 @@
+[[rule]]
+name = "a shared folder for runs that is not ours alone is refused"
+file = "scripts/mutate.py"
+find = '^\s*if found\.st_uid != os\.getuid\(\) or found\.st_mode & 0o022:$'
+replace = 'if False:'
