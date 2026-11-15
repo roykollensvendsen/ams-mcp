@@ -323,8 +323,9 @@ def _run(
     """Run one step. A stop is passed on to it as Ctrl-C and waited for, so it can put back what it changed.
 
     The step has a session of its own, so Ctrl-C in a terminal reaches it once, through
-    this ratchet, not twice. There is no time limit on the wait: these runs never have
-    one. A step that hangs after a stop is ended by hand: kill -9 -- -<its pid>.
+    this ratchet, not twice. Passing it on to what the step started is the step's own job.
+    There is no time limit on the wait: these runs never have one. A step that hangs after
+    a stop is ended by hand, with everything it started: kill -9 -- -<its pid>.
     """
     # Files, not pipes: a step waited for while nobody reads its pipe would block on a full one.
     with tempfile.TemporaryFile("w+") as out, tempfile.TemporaryFile("w+") as err:
@@ -342,8 +343,15 @@ def _run(
             step.wait()
         except BaseException:
             # RULE: a stopped measurement lets its step put back what it changed
-            # The whole group, as Ctrl-C in a terminal would: pytest's own children too.
-            os.killpg(step.pid, signal.SIGINT)
+            # To the step alone. A wrapper such as `uv run` passes Ctrl-C on to what it started,
+            # so the whole group would hear it twice, and the second cuts pytest's clean-up short.
+            try:
+                os.kill(step.pid, signal.SIGINT)
+            except ProcessLookupError:
+                # A step that ended as the stop came has nobody left to tell; a live one must be told.
+                # RULE: a step that ended as the stop came is not an error
+                if step.poll() is None:
+                    raise
             step.wait()  # no time limit: these runs never have one
             raise
         out.seek(0)
