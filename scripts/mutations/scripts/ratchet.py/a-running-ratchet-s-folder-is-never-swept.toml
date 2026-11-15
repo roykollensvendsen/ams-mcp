@@ -1,5 +1,5 @@
 [[rule]]
 name = "a running ratchet's folder is never swept"
 file = "scripts/ratchet.py"
-find = '^\s*if pid\.isdigit\(\) and _alive\(int\(pid\)\):$'
+find = '^\s*if not _dead\(path\):$'
 replace = 'if False:'

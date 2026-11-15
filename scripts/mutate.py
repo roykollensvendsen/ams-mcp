@@ -148,18 +148,62 @@ def line_of(text: str, pattern: str, occurrence: int) -> int:
     raise SystemExit(msg)
 
 
+#: The rights of a folder only its owner may enter.
+PRIVATE = 0o700
+
+
+def _ignore(signals: list[signal.Signals]) -> None:
+    """Ignore these signals until the clean-up under way has finished."""
+    for s in signals:
+        signal.signal(s, signal.SIG_IGN)
+
+
+def _private_folder(path: pathlib.Path) -> None:
+    """Make `path` a folder only this user can enter, or refuse it.
+
+    Its name in the shared temporary folder is fixed, so anyone could have made it
+    first, or put a link there. It is opened once, never through a link, and checked
+    and tightened through that handle: by name, a link swapped in between the check
+    and the change would be followed. A folder of ours that others could only read is
+    just tightened, since nobody else could have put anything in it.
+    """
+    refused = (
+        f"{path} is not a folder of this user's alone: a link, someone else's, or open to"
+        " others to write in. Look at what it is, remove it, and run again."
+    )
+    with contextlib.suppress(FileExistsError):
+        path.mkdir(mode=PRIVATE)
+    try:
+        # RULE: a link in place of the runs' folder is refused
+        handle = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as error:
+        raise SystemExit(refused) from error
+    try:
+        found = os.fstat(handle)
+        # RULE: a shared folder for runs that is not ours alone is refused
+        if found.st_uid != os.getuid() or found.st_mode & 0o022:
+            raise SystemExit(refused)
+        os.fchmod(handle, PRIVATE)
+    finally:
+        os.close(handle)
+
+
 @contextlib.contextmanager
 def stopped_cleanly() -> Iterator[None]:
-    """Let SIGTERM or SIGHUP unwind like Ctrl-C does, so every `finally` runs.
+    """Let SIGTERM or SIGHUP unwind like Ctrl-C does, so every `finally` runs, and a second stop waits.
 
     A timeout, a cancelled job or a closed terminal sends one of them, and by
     default Python stops at once, leaving the mutated file and the run's folder.
     """
+    signals = [signal.SIGINT, signal.SIGTERM, *([signal.SIGHUP] if hasattr(signal, "SIGHUP") else [])]
 
     def stop(signum: int, _frame: object) -> None:
+        # RULE: a second stop does not cut the clean-up short
+        _ignore(signals)
+        if signum == signal.SIGINT:
+            raise KeyboardInterrupt
         raise SystemExit(128 + signum)
 
-    signals = [signal.SIGTERM, *([signal.SIGHUP] if hasattr(signal, "SIGHUP") else [])]
     # RULE: a stopped run cleans up as an interrupted one does
     before = {s: signal.signal(s, stop) for s in signals}
     try:
@@ -252,7 +296,7 @@ def run_suite() -> tuple[int, list[str]]:
     # the wrong rule, so no bytecode is written at all.
     # RULE: two mutations never share a bytecode cache
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
-    MUTATE_TMP.mkdir(parents=True, exist_ok=True)
+    _private_folder(MUTATE_TMP)
     temporary = pathlib.Path(tempfile.mkdtemp(prefix="run-", dir=MUTATE_TMP))
     # A file a test makes and forgets lands here too, and goes with the folder.
     # RULE: a suite run's own temporary files stay in its folder
@@ -268,7 +312,7 @@ def run_suite() -> tuple[int, list[str]]:
                 "--color=no",
                 "-p",
                 "no:cacheprovider",
-                f"--basetemp={temporary}",
+                f"--basetemp={temporary / 'pytest'}",
             ],
             capture_output=True,
             text=True,

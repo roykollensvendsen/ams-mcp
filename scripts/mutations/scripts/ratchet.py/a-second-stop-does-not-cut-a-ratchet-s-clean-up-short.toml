@@ -1,0 +1,5 @@
+[[rule]]
+name = "a second stop does not cut a ratchet's clean-up short"
+file = "scripts/ratchet.py"
+find = '^\s*_ignore\(signals\)$'
+replace = 'pass'
