@@ -121,3 +121,20 @@ def test_an_empty_rule_table_is_not_a_crash(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["mutate.py"])
     assert mutate.main() == 0
     assert "no rules" in capsys.readouterr().out.lower()
+
+
+def test_no_rows_when_rules_are_marked_is_a_failure(tmp_path, monkeypatch, capsys):
+    """Rows deleted by mistake would leave every marked rule unproven and the run green."""
+    mutate = loaded()
+    (tmp_path / "src" / "pkg").mkdir(parents=True)
+    (tmp_path / "src" / "pkg" / "core.py").write_text("# RULE: a rule with no row\nx = 1\n")
+    rows = tmp_path / "mutations"
+    rows.mkdir()
+    monkeypatch.setattr(mutate, "ROOT", tmp_path)
+    monkeypatch.setattr(mutate, "ROWS", rows)
+    monkeypatch.setattr(mutate, "MUTATE_TMP", tmp_path / "mutate-tmp")
+    monkeypatch.setattr("sys.argv", ["mutate.py"])
+    assert mutate.main() == 1
+    said = capsys.readouterr().out
+    assert "1 rule is marked" in said
+    assert "git checkout origin/main -- scripts/mutations" in said

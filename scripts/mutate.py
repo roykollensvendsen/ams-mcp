@@ -42,6 +42,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 #: Every pull request that added a row at the end of one shared table collided with
 #: every other; a file per row only meets another pull request adding the same rule.
 ROWS = ROOT / "scripts/mutations"
+#: How the source marks a rule: a comment line `# RULE: what it says`.
+MARKER = re.compile(r"^[ \t]*#\s*RULE:\s*(.+?)\s*$")
 #: Where the one mutated file is recorded while it is mutated. A `finally` does
 #: not run when the process is killed, so without this a hard stop leaves a
 #: source file switched off and the next person wondering why the suite is red.
@@ -63,6 +65,22 @@ def test_name_for(rule: str) -> str:
     """
     words = re.sub(r"[^a-z0-9]+", "_", rule.lower())
     return "test_" + re.sub(r"_+", "_", words).strip("_")
+
+
+def marked_rules(root: pathlib.Path | None = None) -> set[str]:
+    """Every rule the source marks: the product under src/, and every script of our own.
+
+    Every script in scripts/ counts, the runner itself included; a fixed list missed
+    any tool added later. Row folders there are named after scripts, so only files count.
+    """
+    root = root or ROOT
+    sources = [*(root / "src").rglob("*.py"), *(p for p in (root / "scripts").glob("*.py") if p.is_file())]
+    found = set()
+    for source in sorted(sources):
+        for line in source.read_text(encoding="utf-8").splitlines():
+            if match := MARKER.search(line):
+                found.add(match.group(1))
+    return found
 
 
 def row_path(rule: dict) -> pathlib.PurePosixPath:
@@ -245,6 +263,21 @@ def run_suite() -> tuple[int, list[str]]:
     return int(m.group(1)) if m else 0, [f.split("::")[-1].split("[")[0] for f in failed]
 
 
+def _no_rows() -> int:
+    """With no rows, a scaffold with no rules passes; code that marks rules does not."""
+    marked = len(marked_rules())
+    # RULE: no rows when rules are marked is a failure
+    if marked:
+        print(  # noqa: T201
+            f"nothing to switch off, but {marked} rule{' is' if marked == 1 else 's are'} marked:"
+            f" no rows in {ROWS.relative_to(ROOT)}. Restore it from main"
+            " (git checkout origin/main -- scripts/mutations), or add a row per rule."
+        )
+        return 1
+    print(f"no rules in {ROWS.relative_to(ROOT)} yet; add one file per rule the code enforces")  # noqa: T201
+    return 0
+
+
 def main() -> int:
     """Mutate every rule in turn, restore the tree, and report."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -256,8 +289,7 @@ def main() -> int:
     # A scaffolded repository starts with a table of comments and no rows.
     rules = all_rows()
     if not rules:
-        print(f"no rules in {ROWS.relative_to(ROOT)} yet; add one file per rule the code enforces")  # noqa: T201
-        return 0
+        return _no_rows()
     results = []
     lost: list[str] = []
     standing: tuple[pathlib.Path, str, str] | None = None
