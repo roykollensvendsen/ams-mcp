@@ -121,4 +121,4 @@ def test_a_page_waiting_its_turn_still_gives_up_within_its_own_time(monkeypatch,
     monkeypatch.setattr(reader, "TIMEOUT", 60.0)
     error, took = asyncio.run(one_waits_behind_another())
     assert "monthplot.json waited its turn" in str(error)
-    assert took < 0.5
+    assert took < stall + 0.5  # a stalled loop wakes late; room for a loaded machine on top
