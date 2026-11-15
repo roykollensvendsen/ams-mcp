@@ -22,6 +22,12 @@ replace = 'for _ in range(TRIES + 1):'
 is what replaces it, keeping the file valid. The line's own indentation is
 kept, so do not write indentation here.
 
+A rule in `scripts/` is proven the same way, the mutation runner's own
+included. The runner has loaded its code before it switches a line off, and
+the suite it starts loads the switched-off file. A rule inside `repair()`
+could not be proven like this, since a killed run repairs with the
+switched-off code; keep rules out of it, which a test checks.
+
 Two pull requests that each add a rule then never touch the same file, unless
 they add the same rule. A row in the wrong folder, a file holding two rows,
 and two rows for one rule are each refused by a test, which says where the row

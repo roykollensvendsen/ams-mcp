@@ -14,6 +14,7 @@ that names the rule — otherwise a documented example that happened to change c
 leave a rule looking guarded while nothing guards it.
 """
 
+import ast
 import importlib.util
 import pathlib
 import re
@@ -34,20 +35,7 @@ def _mutate():
 
 def marked_rules() -> set[str]:
     """Every rule the source marks, by the words the marker gives it."""
-    found = set()
-    # The project's own scripts count too, including those the start-repo skill
-    # ships: their rules are proven here, not only in the skill.
-    scripts = [
-        ROOT / "scripts" / n
-        for n in ("no_session_links.py", "private_data_scan.py", "ratchet.py", "mutate.py", "imperative.py")
-    ]
-    sources = [*(ROOT / "src").rglob("*.py"), *scripts]
-    for source in sorted(sources):
-        for line in source.read_text().splitlines():
-            match = MARKER.search(line)
-            if match:
-                found.add(match.group(1))
-    return found
+    return _mutate().marked_rules()
 
 
 def rowed_rules() -> set[str]:
@@ -165,3 +153,28 @@ def test_every_row_finds_the_line_it_switches_off():
         except SystemExit:
             lost.append(f"{rule['name']} ({rule['file']})")
     assert not lost, "rows that find no line: " + "; ".join(lost)
+
+
+def test_a_rule_in_any_script_is_read(tmp_path):
+    """A fixed list of scripts missed any tool added later, and its rules went unproven."""
+    (tmp_path / "src" / "pkg").mkdir(parents=True)
+    (tmp_path / "src" / "pkg" / "core.py").write_text("# RULE: a rule in the product\nx = 1\n")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "a_new_tool.py").write_text("    # RULE: a rule in a new tool\n")
+    # A row folder is named after its script, so a folder called a_new_tool.py is no script.
+    (tmp_path / "scripts" / "mutations" / "scripts" / "a_new_tool.py").mkdir(parents=True)
+    assert _mutate().marked_rules(tmp_path) == {"a rule in the product", "a rule in a new tool"}
+
+
+def test_no_rule_sits_inside_repair():
+    """repair() puts back a file a killed run left switched off, before anything else runs.
+
+    A rule inside it would be proven by running the switched-off repair, so the
+    proof would repair nothing. Keep rules out of it.
+    """
+    source = (ROOT / "scripts" / "mutate.py").read_text()
+    [repair] = [
+        n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef) and n.name == "repair"
+    ]
+    inside = source.splitlines()[repair.lineno - 1 : repair.end_lineno]
+    assert not [line for line in inside if MARKER.search(line)]
