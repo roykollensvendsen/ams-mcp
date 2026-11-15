@@ -55,11 +55,11 @@ FILE = ROOT / "quality.json"
 #: Where each run keeps everything it and its commands make: the copy of the base, its
 #: install, every pytest folder. One folder per run, locked while it runs, removed when
 #: the run ends. Named after this script's checkout, so two checkouts never meet here.
-#: The file in a run's folder that the run holds a lock on for as long as it lives.
-LOCK = ".lock"
-#: How long a folder with no lock may still be a run getting started. A guess: a
-#: start takes milliseconds, and a run that has not locked within an hour never will.
-STARTING_SECONDS = 3600
+#: The lock a run's folder keeps open while the run lives, as the bridge's held_folder.py names it.
+LOCK = ".in-use"
+#: How old a folder with no lock must be before it counts as left by a killed run. A guess:
+#: long enough for any run to have gone from making its folder to locking it.
+GRACE_SECONDS = 60 * 60
 RATCHET_TMP = Path(tempfile.gettempdir()) / (
     "ams-mcp-ratchet-" + hashlib.sha256(str(Path(__file__).resolve()).encode()).hexdigest()[:8]
 )
@@ -316,7 +316,34 @@ def _run(
     cwd: Path = ROOT,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True, check=False)  # noqa: S603
+    """Run one step. A stop is passed on to it as Ctrl-C and waited for, so it can put back what it changed.
+
+    The step has a session of its own, so Ctrl-C in a terminal reaches it once, through
+    this ratchet, not twice. There is no time limit on the wait: these runs never have
+    one. A step that hangs after a stop is ended by hand: kill -9 -- -<its pid>.
+    """
+    # Files, not pipes: a step waited for while nobody reads its pipe would block on a full one.
+    with tempfile.TemporaryFile("w+") as out, tempfile.TemporaryFile("w+") as err:
+        step = subprocess.Popen(  # noqa: S603 - every command is this script's own
+            command,
+            cwd=cwd,
+            env=env,
+            stdout=out,
+            stderr=err,
+            text=True,
+            # RULE: a ratchet's step hears a stop only through the ratchet
+            start_new_session=True,
+        )
+        try:
+            step.wait()
+        except BaseException:
+            # RULE: a stopped measurement lets its step put back what it changed
+            step.send_signal(signal.SIGINT)
+            step.wait()  # no time limit: these runs never have one
+            raise
+        out.seek(0)
+        err.seek(0)
+        return subprocess.CompletedProcess(command, step.returncode, out.read(), err.read())
 
 
 #: The rights of a folder only its owner may enter.
@@ -335,12 +362,11 @@ def _private_folder(path: Path) -> None:
     Its name in the shared temporary folder is fixed, so anyone could have made it
     first, or put a link there. It is opened once, never through a link, and checked
     and tightened through that handle: by name, a link swapped in between the check
-    and the change would be followed. A folder of ours that others could only read is
-    just tightened, since nobody else could have put anything in it.
+    and the change would be followed. Checked at the start of a run and in the sweep.
     """
     refused = (
         f"{path} is not a folder of this user's alone: a link, someone else's, or open to"
-        " others to write in. Look at what it is, remove it, and run again."
+        f" others. Look at what is in it, then remove it and run again: rm -rf {path}"
     )
     with contextlib.suppress(FileExistsError):
         path.mkdir(mode=PRIVATE)
@@ -352,7 +378,7 @@ def _private_folder(path: Path) -> None:
     try:
         found = os.fstat(handle)
         # RULE: a ratchet folder that is not ours alone is refused
-        if found.st_uid != os.getuid() or found.st_mode & 0o022:
+        if found.st_uid != os.getuid() or found.st_mode & 0o077:
             raise SystemExit(refused)
         os.fchmod(handle, PRIVATE)
     finally:
@@ -404,32 +430,33 @@ def _remove(folder: Path) -> None:
     shutil.rmtree(folder, onexc=_writable_again)
 
 
-def _ours(path: Path) -> bool:
-    """A real folder of this user's: never a link, and never somebody else's."""
-    found = path.lstat()
-    # RULE: a link in the ratchet folder is never followed
-    return stat.S_ISDIR(found.st_mode) and found.st_uid == os.getuid()
+def left_behind(path: Path) -> bool:
+    """Whether `path` is a run's folder of this user's whose lock nobody holds.
 
-
-def _dead(path: Path) -> bool:
-    """Whether `path` is the folder of a run that has ended, so nobody's lock is on it."""
-    named, starting = path.name.startswith("run-"), path.name.startswith("starting-")
-    if not (named or starting) or not _ours(path):
-        return False
-    young = time.time() - path.lstat().st_mtime < STARTING_SECONDS
-    # RULE: a ratchet run that is still starting is never swept
-    if starting and young:
-        return False  # it may be making its lock right now
+    As the bridge's held_folder.py does it. The first lstat is the only one: a folder
+    another sweep removes in between is passed over rather than failing this run.
+    """
     try:
-        lock = os.open(path / LOCK, os.O_RDWR | os.O_NOFOLLOW)
+        found = path.lstat()
     except FileNotFoundError:
-        return not young  # a name just claimed, or a run killed before it locked
+        # RULE: a folder another sweep removed is passed over
+        return False  # gone already
+    # RULE: a link in the ratchet folder is never followed
+    if not stat.S_ISDIR(found.st_mode) or found.st_uid != os.getuid():
+        return False
+    try:
+        lock = os.open(path / LOCK, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        # Made before its lock existed, or by a run killed between the two.
+        # RULE: a ratchet run that is still starting is never swept
+        return time.time() - found.st_mtime > GRACE_SECONDS
     except OSError:
         return False
     try:
+        # RULE: a running ratchet's folder is never swept
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        return False  # a run still going holds it
+        return False
     finally:
         os.close(lock)
     return True
@@ -437,26 +464,25 @@ def _dead(path: Path) -> bool:
 
 def sweep() -> None:
     """Remove what earlier runs, killed before they could clean up, left; never a live run's."""
-    for path in sorted(RATCHET_TMP.iterdir()) if RATCHET_TMP.is_dir() else []:
-        # RULE: a running ratchet's folder is never swept
-        if not _dead(path):
-            continue
+    _private_folder(RATCHET_TMP)
+    for path in sorted(RATCHET_TMP.glob("run-*")):
         # RULE: a killed ratchet run's folder is swept at the next start
-        _remove(path)
+        if left_behind(path):
+            with contextlib.suppress(FileNotFoundError):
+                _remove(path)
 
 
 @contextlib.contextmanager
 def run_folder() -> Iterator[Path]:
     """A folder for this run, locked while it lives, and the temporary folder of every command it starts."""
-    _private_folder(RATCHET_TMP)
     sweep()
-    # Locked under a name the sweep leaves alone, then renamed: a sweep in between sees it locked.
-    starting = Path(tempfile.mkdtemp(prefix="starting-", dir=RATCHET_TMP))
-    lock = os.open(starting / LOCK, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    folder = Path(tempfile.mkdtemp(prefix="run-", dir=RATCHET_TMP))
+    # Locked under another name, then renamed, so the lock's name never stands unlocked.
+    starting = folder / (LOCK + "-starting")
+    lock = os.open(starting, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     # RULE: a ratchet run holds its folder's lock until it ends
     fcntl.flock(lock, fcntl.LOCK_EX)
-    folder = Path(tempfile.mkdtemp(prefix="run-", dir=RATCHET_TMP))  # claims a name no other run has
-    starting.rename(folder)
+    starting.rename(folder / LOCK)
     before = os.environ.get("TMPDIR"), tempfile.tempdir
     # RULE: a ratchet run's commands keep their temporary files in its folder
     os.environ["TMPDIR"] = str(folder)

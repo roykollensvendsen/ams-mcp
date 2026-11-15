@@ -1,0 +1,5 @@
+[[rule]]
+name = "a link in the runs' folder is never followed"
+file = "scripts/mutate.py"
+find = '^\s*if not _ours\(left\):$'
+replace = 'if False:'

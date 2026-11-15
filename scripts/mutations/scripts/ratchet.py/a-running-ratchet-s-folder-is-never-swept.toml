@@ -1,5 +1,5 @@
 [[rule]]
 name = "a running ratchet's folder is never swept"
 file = "scripts/ratchet.py"
-find = '^\s*if not _dead\(path\):$'
-replace = 'if False:'
+find = '^\s*fcntl\.flock\(lock, fcntl\.LOCK_EX \| fcntl\.LOCK_NB\)$'
+replace = 'pass'

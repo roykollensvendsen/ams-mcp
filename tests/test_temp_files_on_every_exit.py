@@ -8,8 +8,10 @@ as a timeout or a closed terminal does. A run killed outright is swept at the ne
 start. These tests point the temporary folder at their own, and look at what is left.
 """
 
+import contextlib
 import fcntl
 import importlib.util
+import json
 import os
 import pathlib
 import shutil
@@ -153,8 +155,9 @@ def test_a_stopped_ratchet_run_cleans_up_as_an_interrupted_one_does(tmp_path):
 
 def _a_run_folder(ratchet, name, *, held):
     """A run's folder with its lock file, and the lock held when the run is still going."""
+    ratchet.RATCHET_TMP.mkdir(mode=0o700, exist_ok=True)
     folder = ratchet.RATCHET_TMP / name
-    folder.mkdir(parents=True)
+    folder.mkdir()
     lock = os.open(folder / ratchet.LOCK, os.O_RDWR | os.O_CREAT, 0o600)
     if held:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -188,17 +191,22 @@ def test_a_running_ratchet_s_folder_is_never_swept(tmp_path, monkeypatch):
 
 
 def test_a_ratchet_run_that_is_still_starting_is_never_swept(tmp_path, monkeypatch):
-    """A new folder is locked before it takes a run's name; until an hour old, it may be mid-way."""
+    """A folder is made a moment before its lock; until it is an hour old, it may be in that moment."""
     ratchet = _ratchet(tmp_path / "tmp", monkeypatch)
-    young = ratchet.RATCHET_TMP / "starting-abc"
-    old = ratchet.RATCHET_TMP / "starting-old"
-    young.mkdir(parents=True)
+    ratchet.RATCHET_TMP.mkdir(mode=0o700)
+    young, old = ratchet.RATCHET_TMP / "run-young", ratchet.RATCHET_TMP / "run-old"
+    young.mkdir()
     old.mkdir()
-    an_hour_ago = time.time() - ratchet.STARTING_SECONDS - 1
+    an_hour_ago = time.time() - ratchet.GRACE_SECONDS - 1
     os.utime(old, (an_hour_ago, an_hour_ago))
-    monkeypatch.setattr(ratchet, "_run", lambda *_, **__: None)
     ratchet.sweep()
     assert (young.exists(), old.exists()) == (True, False)
+
+
+def test_a_folder_another_sweep_removed_is_passed_over(tmp_path, monkeypatch):
+    """Two runs starting together sweep together; the one that finds a folder gone goes on."""
+    ratchet = _ratchet(tmp_path / "tmp", monkeypatch)
+    assert ratchet.left_behind(tmp_path / "run-gone") is False
 
 
 def test_a_ratchet_run_holds_its_folder_s_lock_until_it_ends(tmp_path, monkeypatch):
@@ -229,9 +237,13 @@ def test_a_ratchet_folder_that_is_not_ours_alone_is_refused(tmp_path, monkeypatc
     """It has a fixed name in the shared /tmp, so anyone could have made it first."""
     ratchet = _ratchet(tmp_path / "tmp", monkeypatch)
     ratchet.RATCHET_TMP.mkdir()
-    ratchet.RATCHET_TMP.chmod(0o777)
-    with pytest.raises(SystemExit, match="not a folder of this user's alone"), ratchet.run_folder():
-        pass
+    for mode in (0o777, 0o755):  # writable by others, and only readable by them
+        ratchet.RATCHET_TMP.chmod(mode)
+        with (
+            pytest.raises(SystemExit, match=r"not a folder of this user's alone.*rm -rf"),
+            ratchet.run_folder(),
+        ):
+            pass
 
 
 def _a_link_in_place_of(folder, tmp_path):
@@ -259,48 +271,197 @@ def test_a_shared_folder_for_runs_that_is_not_ours_alone_is_refused(tmp_path, mo
     project = _project(tmp_path, LEAKY_TEST)
     mutate = _load(project / "scripts/mutate.py", "mutate_open", tmp_path / "tmp", monkeypatch)
     mutate.MUTATE_TMP.mkdir()
-    mutate.MUTATE_TMP.chmod(0o777)
-    with pytest.raises(SystemExit, match="not a folder of this user's alone"):
-        mutate.run_suite()
+    for mode in (0o777, 0o755):  # writable by others, and only readable by them
+        mutate.MUTATE_TMP.chmod(mode)
+        with pytest.raises(SystemExit, match=r"not a folder of this user's alone.*rm -rf"):
+            mutate.run_suite()
 
 
-def _a_second_stop_waits(script, tmp_path, monkeypatch):
-    """Once a stop is under way, a second one (Ctrl-C, then a timeout's SIGTERM) waits until it is done."""
-    module = _load(ROOT / f"scripts/{script}.py", f"{script}_twice", tmp_path / "tmp", monkeypatch)
-    before = signal.getsignal(signal.SIGTERM)
-    with module.stopped_cleanly():
-        with pytest.raises(KeyboardInterrupt):  # Ctrl-C, as the handler Python runs for it sees it
-            signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
-        assert signal.getsignal(signal.SIGTERM) == signal.SIG_IGN
-    assert signal.getsignal(signal.SIGTERM) == before
+def _wait_for(path, run):
+    deadline = time.monotonic() + 30
+    while not path.exists():
+        assert run.poll() is None, run.communicate()[0]
+        assert time.monotonic() < deadline, f"never saw {path.name}"
+        time.sleep(0.05)
 
 
-def test_a_second_stop_does_not_cut_the_clean_up_short(tmp_path, monkeypatch):
-    _a_second_stop_waits("mutate", tmp_path, monkeypatch)
+def _ctrl_c_then_a_stop(command, tmp_path, cwd):
+    """Ctrl-C, and once the clean-up has begun, SIGTERM, as GitHub cancels a job."""
+    run = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env={**os.environ, "TMPDIR": str(tmp_path / "tmp")},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    _wait_for(tmp_path / "started", run)
+    run.send_signal(signal.SIGINT)
+    _wait_for(tmp_path / "cleaning", run)
+    run.send_signal(signal.SIGTERM)
+    return run.communicate(timeout=60)[0]
 
 
-def test_a_second_stop_does_not_cut_a_ratchet_s_clean_up_short(tmp_path, monkeypatch):
-    _a_second_stop_waits("ratchet", tmp_path, monkeypatch)
+SLOW_MUTATE = """
+import importlib.util, pathlib, sys, time
+project, tmp = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location("mutate", project / "scripts/mutate.py")
+mutate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mutate)
+restore = mutate.restore
+
+def slow_restore(*args):
+    (tmp / "cleaning").write_text("")
+    time.sleep(2)  # putting a file back takes a moment; a second stop must wait for it
+    return restore(*args)
+
+mutate.restore = slow_restore
+sys.argv = ["mutate.py"]
+sys.exit(mutate.main())
+"""
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows has no SIGTERM to send")
-def test_ctrl_c_then_a_stop_still_cleans_up(tmp_path):
-    started, tmp = tmp_path / "started", tmp_path / "tmp"
-    tmp.mkdir()
-    project = _project(tmp_path, SLOW_TEST.format(started=str(started)))
-    run = subprocess.Popen(
-        [sys.executable, "scripts/mutate.py"], cwd=project, env={**os.environ, "TMPDIR": str(tmp)}
+def test_a_second_stop_does_not_cut_the_clean_up_short(tmp_path):
+    (tmp_path / "tmp").mkdir()
+    project = _project(tmp_path, SLOW_TEST.format(started=str(tmp_path / "started")))
+    out = _ctrl_c_then_a_stop(
+        [sys.executable, "-c", SLOW_MUTATE, str(project), str(tmp_path)], tmp_path, project
     )
-    deadline = time.monotonic() + 30
-    while not started.exists():
-        assert run.poll() is None, "the run ended before it got going"
-        assert time.monotonic() < deadline, "the run never got going"
-        time.sleep(0.05)
-    run.send_signal(signal.SIGINT)
-    run.send_signal(signal.SIGTERM)
-    assert run.wait(timeout=30) != 0
-    assert list(tmp.iterdir()) == []
-    assert (project / "src/x.py").read_text() == "# RULE: the value is one\nvalue = 1\n"
+    assert (project / "src/x.py").read_text() == "# RULE: the value is one\nvalue = 1\n", out
+    assert not (project / "scripts/.mutate-recovery.json").exists()
+    assert list((tmp_path / "tmp").iterdir()) == []
+
+
+SLOW_RATCHET = """
+import importlib.util, pathlib, sys, time
+tmp = pathlib.Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location("ratchet", sys.argv[1])
+ratchet = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ratchet)
+remove = ratchet._remove
+
+def slow_remove(folder):
+    (tmp / "cleaning").write_text("")
+    time.sleep(2)  # removing a copy of main takes a moment; a second stop must wait for it
+    remove(folder)
+
+ratchet._remove = slow_remove
+sleeper = f"import pathlib, time; pathlib.Path({str(tmp / 'started')!r}).touch(); time.sleep(60)"
+with ratchet.stopped_cleanly(), ratchet.run_folder():
+    ratchet._run(sys.executable, "-c", sleeper)
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows has no SIGTERM to send")
+def test_a_second_stop_does_not_cut_a_ratchet_s_clean_up_short(tmp_path):
+    (tmp_path / "tmp").mkdir()
+    command = [sys.executable, "-c", SLOW_RATCHET, str(ROOT / "scripts/ratchet.py"), str(tmp_path)]
+    out = _ctrl_c_then_a_stop(command, tmp_path, tmp_path)
+    assert list((tmp_path / "tmp").iterdir()) == [], out
+
+
+STEP = """
+import os, pathlib, signal, sys, time
+tmp = pathlib.Path(sys.argv[1])
+
+def put_back(signum, frame):
+    time.sleep(1)  # putting a line back takes a moment; the ratchet must wait for it
+    (tmp / "put-back").write_text("")
+    sys.exit(1)
+
+signal.signal(signal.SIGINT, put_back)
+(tmp / "step.pid").write_text(str(os.getpid()))
+(tmp / "ready").write_text("")
+time.sleep(20)  # never told: give up, and leave no put-back behind
+"""
+
+FORWARDING_RATCHET = """
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ratchet", sys.argv[1])
+ratchet = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ratchet)
+with ratchet.stopped_cleanly():
+    ratchet._run(sys.executable, "-c", sys.argv[3], sys.argv[2])
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows has no SIGTERM to send")
+@pytest.mark.parametrize("stop", [signal.SIGINT, signal.SIGTERM, signal.SIGHUP], ids=["INT", "TERM", "HUP"])
+def test_a_stopped_measurement_lets_its_step_put_back_what_it_changed(tmp_path, stop):
+    """The step may be a mutation run with a rule switched off; it must hear the stop and finish."""
+    command = [
+        sys.executable,
+        "-c",
+        FORWARDING_RATCHET,
+        str(ROOT / "scripts/ratchet.py"),
+        str(tmp_path),
+        STEP,
+    ]
+    ratchet = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        _wait_for(tmp_path / "ready", ratchet)
+        ratchet.send_signal(stop)  # to the ratchet alone, as when its job is cancelled
+        out, _ = ratchet.communicate(timeout=60)
+        assert (tmp_path / "put-back").exists(), out
+    finally:
+        if ratchet.poll() is None:
+            ratchet.kill()
+        if (tmp_path / "step.pid").exists():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int((tmp_path / "step.pid").read_text()), signal.SIGKILL)
+
+
+def test_a_ratchet_s_step_hears_a_stop_only_through_the_ratchet(tmp_path, monkeypatch):
+    """In a session of its own, a terminal's Ctrl-C reaches the step once, by way of the ratchet."""
+    ratchet = _ratchet(tmp_path / "tmp", monkeypatch)
+    said = ratchet._run(sys.executable, "-c", "import os; print(os.getsid(0) == os.getpid())")  # noqa: SLF001
+    assert said.stdout.strip() == "True"
+
+
+def test_a_link_in_the_runs_folder_is_never_followed(tmp_path, monkeypatch):
+    """The sweep removes real folders of ours; a link planted there is left, and so is its target."""
+    project = _project(tmp_path, LEAKY_TEST)
+    mutate = _load(project / "scripts/mutate.py", "mutate_planted", tmp_path / "tmp", monkeypatch)
+    outside = tmp_path / "outside"
+    (outside / "kept").mkdir(parents=True)
+    (outside / "kept").chmod(0o500)  # short of what a removal gives back, so any touch shows
+    mutate.MUTATE_TMP.mkdir(mode=0o700)
+    (mutate.MUTATE_TMP / "run-planted").symlink_to(outside)
+    mutate.sweep()
+    assert (mutate.MUTATE_TMP / "run-planted").is_symlink()
+    assert (outside / "kept").stat().st_mode & 0o777 == 0o500
+
+
+def test_a_second_mutation_run_in_one_checkout_stops_at_once(tmp_path, monkeypatch, capsys):
+    project = _project(tmp_path, LEAKY_TEST)
+    mutate = _load(project / "scripts/mutate.py", "mutate_second", tmp_path / "tmp", monkeypatch)
+    monkeypatch.setattr(mutate, "run_suite", _must_not_run)
+    monkeypatch.setattr("sys.argv", ["mutate.py"])
+    first = os.open(mutate.RECOVERY.parent / ".mutate.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(first, fcntl.LOCK_EX)
+        assert mutate.main() == 1
+    finally:
+        os.close(first)
+    assert "already going in this checkout" in capsys.readouterr().out
+
+
+def _must_not_run():
+    raise AssertionError("the suite ran")
+
+
+def test_a_repair_only_run_puts_back_and_does_nothing_else(tmp_path, monkeypatch):
+    project = _project(tmp_path, LEAKY_TEST)
+    mutate = _load(project / "scripts/mutate.py", "mutate_repair", tmp_path / "tmp", monkeypatch)
+    original, mutated = "# RULE: the value is one\nvalue = 1\n", "# RULE: the value is one\nvalue = 2\n"
+    (project / "src/x.py").write_text(mutated)
+    mutate.RECOVERY.write_text(json.dumps({"file": "src/x.py", "original": original, "mutated": mutated}))
+    monkeypatch.setattr(mutate, "run_suite", _must_not_run)
+    monkeypatch.setattr("sys.argv", ["mutate.py", "--repair-only"])
+    assert mutate.main() == 0
+    assert (project / "src/x.py").read_text() == original
+    assert not mutate.RECOVERY.exists()
 
 
 def test_the_base_is_measured_where_no_other_branch_can_be_seen(tmp_path, monkeypatch):

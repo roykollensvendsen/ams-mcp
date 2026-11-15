@@ -1,0 +1,5 @@
+[[rule]]
+name = "a second mutation run in one checkout stops at once"
+file = "scripts/mutate.py"
+find = '^\s*fcntl\.flock\(handle, fcntl\.LOCK_EX \| fcntl\.LOCK_NB\)$'
+replace = 'pass'

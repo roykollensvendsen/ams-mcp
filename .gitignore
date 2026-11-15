@@ -16,3 +16,4 @@ src/*/_version.py
 coverage.xml
 htmlcov/
 scripts/.mutate-recovery.json
+scripts/.mutate.lock
