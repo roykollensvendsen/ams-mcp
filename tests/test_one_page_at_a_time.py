@@ -10,6 +10,7 @@ one is open, which is the harshest case: every answer must still come.
 """
 
 import asyncio
+import contextlib
 import time
 
 import httpx
@@ -28,6 +29,7 @@ class OneAtATime(httpx.AsyncBaseTransport):
     def __init__(self, seconds=0.01, hang=()):
         self.seconds, self.hang = seconds, set(hang)
         self.open = self.most_open = 0
+        self.serving = asyncio.Event()  # set once a request holds the connection
         self.paths = []
 
     async def handle_async_request(self, request):
@@ -35,6 +37,7 @@ class OneAtATime(httpx.AsyncBaseTransport):
             msg = "the reader is serving another connection"
             raise httpx.ConnectError(msg, request=request)
         self.open += 1
+        self.serving.set()
         self.most_open = max(self.most_open, self.open)
         self.paths.append(request.url.path)
         try:
@@ -87,20 +90,35 @@ def test_two_questions_at_the_same_moment_read_a_page_once():
     assert fake.paths.count("/data.json") == 1
 
 
-def test_a_page_waiting_its_turn_still_gives_up_within_its_own_time(monkeypatch):
+@pytest.mark.parametrize("stall", [0.0, 0.35], ids=["a quiet machine", "a busy machine"])
+def test_a_page_waiting_its_turn_still_gives_up_within_its_own_time(monkeypatch, stall):
     # The time a page waits behind another counts against its own limit, so a
     # reader that hangs never makes an answer wait for several pages in a row.
-    monkeypatch.setattr(reader, "TIMEOUT", 0.3)
+    # The page ahead keeps its turn for as long as the test needs: started under a
+    # long limit, it cannot time out at the same moment as the one waiting. With
+    # both on 0.3 s, a late wake-up let both limits pass at once, the first gave
+    # up its turn, and the second got it before its own limit fired.
     fake = OneAtATime(hang={"data.json"})
+    r = _reader(fake)
 
-    async def two_at_once():
-        r = _reader(fake)
-        return await asyncio.gather(r.page("data.json"), r.page("monthplot.json"), return_exceptions=True)
+    async def one_waits_behind_another():
+        ahead = asyncio.create_task(r.page("data.json"))
+        await fake.serving.wait()  # the page ahead holds the turn and is being read
+        monkeypatch.setattr(reader, "TIMEOUT", 0.3)
+        if stall:  # a busy machine: the loop wakes late, past the waiting page's limit
+            asyncio.get_running_loop().call_later(0.01, time.sleep, stall)
+        started = time.monotonic()
+        try:
+            await r.page("monthplot.json")
+        except reader.ReaderError as error:
+            return error, time.monotonic() - started
+        finally:
+            ahead.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await ahead
+        return None, time.monotonic() - started
 
-    started = time.monotonic()
-    first, second = asyncio.run(two_at_once())
-    assert isinstance(first, reader.ReaderError)
-    assert "data.json was not answered" in str(first)
-    assert isinstance(second, reader.ReaderError)
-    assert "monthplot.json waited its turn" in str(second)
-    assert time.monotonic() - started < 0.5
+    monkeypatch.setattr(reader, "TIMEOUT", 60.0)
+    error, took = asyncio.run(one_waits_behind_another())
+    assert "monthplot.json waited its turn" in str(error)
+    assert took < 0.5
