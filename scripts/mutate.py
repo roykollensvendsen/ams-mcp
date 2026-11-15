@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as dt
+import fcntl
 import hashlib
 import json
 import os
@@ -164,12 +165,11 @@ def _private_folder(path: pathlib.Path) -> None:
     Its name in the shared temporary folder is fixed, so anyone could have made it
     first, or put a link there. It is opened once, never through a link, and checked
     and tightened through that handle: by name, a link swapped in between the check
-    and the change would be followed. A folder of ours that others could only read is
-    just tightened, since nobody else could have put anything in it.
+    and the change would be followed. Checked at the start of a run and in the sweep.
     """
     refused = (
         f"{path} is not a folder of this user's alone: a link, someone else's, or open to"
-        " others to write in. Look at what it is, remove it, and run again."
+        f" others. Look at what is in it, then remove it and run again: rm -rf {path}"
     )
     with contextlib.suppress(FileExistsError):
         path.mkdir(mode=PRIVATE)
@@ -181,7 +181,7 @@ def _private_folder(path: pathlib.Path) -> None:
     try:
         found = os.fstat(handle)
         # RULE: a shared folder for runs that is not ours alone is refused
-        if found.st_uid != os.getuid() or found.st_mode & 0o022:
+        if found.st_uid != os.getuid() or found.st_mode & 0o077:
             raise SystemExit(refused)
         os.fchmod(handle, PRIVATE)
     finally:
@@ -274,11 +274,46 @@ def _remove(folder: pathlib.Path) -> None:
     shutil.rmtree(folder, onexc=_writable_again)
 
 
+def _ours(path: pathlib.Path) -> bool:
+    """A real folder of this user's: never a link, and never somebody else's."""
+    try:
+        found = path.lstat()
+    except FileNotFoundError:
+        return False
+    return stat.S_ISDIR(found.st_mode) and found.st_uid == os.getuid()
+
+
 def sweep() -> None:
-    """Remove what an earlier run, killed before it could clean up, left behind."""
+    """Remove what an earlier run, killed before it could clean up, left behind.
+
+    Only one run goes at a time in a checkout (see `_the_only_run`), so whatever is
+    here when one starts was left by a run that is gone.
+    """
+    _private_folder(MUTATE_TMP)
     # RULE: a killed run's temporary files are swept at the next start
     for left in MUTATE_TMP.iterdir() if MUTATE_TMP.is_dir() else []:
-        _remove(left)
+        # RULE: a link in the runs' folder is never followed
+        if not _ours(left):
+            continue
+        with contextlib.suppress(FileNotFoundError):
+            _remove(left)
+
+
+def _the_only_run() -> int | None:
+    """Lock the checkout for this run, or say no if another run holds it.
+
+    Two runs in one checkout would switch rules off under each other, and each
+    would sweep the other's folders. The lock sits beside the recovery record,
+    outside version control, and is let go of when the process ends, however it ends.
+    """
+    handle = os.open(RECOVERY.parent / ".mutate.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        # RULE: a second mutation run in one checkout stops at once
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(handle)
+        return None
+    return handle
 
 
 def recover() -> None:
@@ -351,11 +386,28 @@ def main() -> int:
     """Mutate every rule in turn, restore the tree, and report."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write", type=pathlib.Path, help="write the evidence table here")
+    parser.add_argument(
+        "--repair-only",
+        action="store_true",
+        help="put back what a killed run left switched off, and nothing else",
+    )
     args = parser.parse_args()
     with stopped_cleanly():
+        held = _the_only_run()
+        if held is None:
+            busy = (
+                "A mutation run is already going in this checkout. Let it finish, or stop it, then run again."
+            )
+            print(busy)  # noqa: T201
+            return 1
         try:
+            # RULE: a repair-only run puts back and does nothing else
+            if args.repair_only:
+                recover()
+                return 0
             return _mutate_all(args)
         finally:
+            os.close(held)
             # Each run's folder is gone by now; the one that held them goes too, if empty.
             # RULE: a finished run leaves no empty folder behind
             with contextlib.suppress(OSError):

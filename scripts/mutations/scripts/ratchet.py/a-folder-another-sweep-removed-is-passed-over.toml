@@ -1,0 +1,5 @@
+[[rule]]
+name = "a folder another sweep removed is passed over"
+file = "scripts/ratchet.py"
+find = '^\s*return False  # gone already$'
+replace = 'raise'

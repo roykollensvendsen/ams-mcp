@@ -1,5 +1,5 @@
 [[rule]]
 name = "a ratchet folder that is not ours alone is refused"
 file = "scripts/ratchet.py"
-find = '^\s*if found\.st_uid != os\.getuid\(\) or found\.st_mode & 0o022:$'
+find = '^\s*if found\.st_uid != os\.getuid\(\) or found\.st_mode & 0o077:$'
 replace = 'if False:'

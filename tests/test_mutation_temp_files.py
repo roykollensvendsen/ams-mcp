@@ -73,6 +73,7 @@ def test_removing_a_run_s_files_never_changes_a_folder_it_links_to(tmp_path, mon
 
 def test_a_killed_run_s_temporary_files_are_swept_at_the_next_start(tmp_path, monkeypatch):
     mutate = _mutate(tmp_path, monkeypatch)
+    mutate.MUTATE_TMP.mkdir(mode=0o700)
     left = mutate.MUTATE_TMP / "run-left-by-a-killed-run"
     (left / "shut").mkdir(parents=True)
     (left / "shut" / "inside.txt").write_text("x")

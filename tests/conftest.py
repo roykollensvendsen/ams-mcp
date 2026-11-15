@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Guards that hold for the whole test session."""
 
+import contextlib
 import pathlib
+import signal
 
 import pytest
 
@@ -27,3 +29,29 @@ def no_test_touches_the_real_recovery_record():
     assert _record() == before, (
         f"a test changed {RECOVERY.relative_to(ROOT)}; point mutate.RECOVERY at tmp_path in that test"
     )
+
+
+#: How a run is stopped from outside: Ctrl-C, a cancelled CI job, a closed terminal.
+STOPS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+
+
+@contextlib.contextmanager
+def stop_handlers_kept():
+    """Put SIGINT, SIGTERM and SIGHUP back as they were, whatever ran in between."""
+    before = {each: signal.getsignal(each) for each in STOPS}
+    try:
+        yield
+    finally:
+        for each, handler in before.items():
+            signal.signal(each, handler)
+
+
+@pytest.fixture(autouse=True)
+def _stop_handlers_kept():
+    """A test that runs a script's main() installs its stop handlers in this process.
+
+    Put the test run's own back afterwards, so Ctrl-C still stops pytest and the next
+    test of those handlers starts from a process that has none.
+    """
+    with stop_handlers_kept():
+        yield

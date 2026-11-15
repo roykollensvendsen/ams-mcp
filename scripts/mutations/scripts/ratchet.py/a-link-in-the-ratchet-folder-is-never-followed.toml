@@ -1,5 +1,5 @@
 [[rule]]
 name = "a link in the ratchet folder is never followed"
 file = "scripts/ratchet.py"
-find = '^\s*return stat\.S_ISDIR\(found\.st_mode\) and found\.st_uid == os\.getuid\(\)$'
-replace = 'return True'
+find = '^\s*if not stat\.S_ISDIR\(found\.st_mode\) or found\.st_uid != os\.getuid\(\):$'
+replace = 'if False:'

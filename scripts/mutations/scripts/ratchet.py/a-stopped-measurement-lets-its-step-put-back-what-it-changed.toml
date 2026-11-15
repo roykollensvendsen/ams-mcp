@@ -1,0 +1,5 @@
+[[rule]]
+name = "a stopped measurement lets its step put back what it changed"
+file = "scripts/ratchet.py"
+find = '^\s*step\.send_signal\(signal\.SIGINT\)$'
+replace = 'pass'
