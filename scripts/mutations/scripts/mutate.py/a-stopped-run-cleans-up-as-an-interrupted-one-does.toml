@@ -1,0 +1,5 @@
+[[rule]]
+name = "a stopped run cleans up as an interrupted one does"
+file = "scripts/mutate.py"
+find = '^\s*before = \{s: signal\.signal\(s, stop\) for s in signals\}$'
+replace = 'before = {}'

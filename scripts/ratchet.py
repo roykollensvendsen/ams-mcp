@@ -30,9 +30,13 @@ from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
+import hashlib
 import json
 import os
 import re
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -41,11 +45,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
 # The tree to measure: this one, or a copy of the base named by RATCHET_ROOT (see measure_at).
 ROOT = Path(os.environ.get("RATCHET_ROOT") or Path(__file__).resolve().parent.parent)
 FILE = ROOT / "quality.json"
+#: Where each run keeps everything it and its commands make: the copy of the base, its
+#: install, every pytest folder. One folder per run, named by its process, removed when
+#: the run ends. Named after this script's checkout, so two checkouts never meet here.
+RATCHET_TMP = Path(tempfile.gettempdir()) / (
+    "ams-mcp-ratchet-" + hashlib.sha256(str(Path(__file__).resolve()).encode()).hexdigest()[:8]
+)
 SOURCE = ROOT / "src"
 PACKAGE = SOURCE / "ams_mcp"
 COVERAGE_WOBBLE = 0.5  # percentage points: coverage differs slightly between machines and versions
@@ -302,6 +312,96 @@ def _run(
     return subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True, check=False)  # noqa: S603
 
 
+@contextlib.contextmanager
+def stopped_cleanly() -> Iterator[None]:
+    """Let SIGTERM or SIGHUP unwind like Ctrl-C does, so every `finally` runs.
+
+    A timeout, a cancelled job or a closed terminal sends one of them, and by
+    default Python stops at once, leaving the copy of the base and its install.
+    """
+
+    def stop(signum: int, _frame: object) -> None:
+        raise SystemExit(128 + signum)
+
+    signals = [signal.SIGTERM, *([signal.SIGHUP] if hasattr(signal, "SIGHUP") else [])]
+    # RULE: a stopped ratchet run cleans up as an interrupted one does
+    before = {s: signal.signal(s, stop) for s in signals}
+    try:
+        yield
+    finally:
+        for s, handler in before.items():
+            signal.signal(s, handler)
+
+
+def _writable_again(func: Callable[[str], object], path: str, _exc: object) -> None:
+    """Let a refused delete through: a test may have shut a folder of its own."""
+    for place in (Path(path).parent, Path(path)):
+        if not place.is_symlink():
+            with contextlib.suppress(OSError):
+                place.chmod(0o700)
+    func(path)
+
+
+def _remove(folder: Path) -> None:
+    """Delete a run's folder, even where a test took away the rights to list or delete it."""
+    # A folder shut to mode 0 cannot even be listed, so open each one before going in.
+    for place, folders, _ in os.walk(folder):
+        for name in folders:
+            if not (Path(place) / name).is_symlink():
+                with contextlib.suppress(OSError):
+                    (Path(place) / name).chmod(0o700)
+    shutil.rmtree(folder, onexc=_writable_again)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def sweep() -> None:
+    """Remove what an earlier run, killed before it could clean up, left behind."""
+    swept = False
+    for left in sorted(RATCHET_TMP.glob("run-*")) if RATCHET_TMP.is_dir() else []:
+        pid = left.name.split("-")[1]
+        # RULE: a running ratchet's folder is never swept
+        if pid.isdigit() and _alive(int(pid)):
+            continue
+        # RULE: a killed ratchet run's folder is swept at the next start
+        _remove(left)
+        swept = True
+    if swept:
+        # The copy of the base was a git worktree; git still lists it until told it is gone.
+        _run("git", "worktree", "prune")
+
+
+@contextlib.contextmanager
+def run_folder() -> Iterator[Path]:
+    """A folder for this run, which every command it starts uses as its temporary folder."""
+    sweep()
+    RATCHET_TMP.mkdir(parents=True, exist_ok=True)
+    folder = Path(tempfile.mkdtemp(prefix=f"run-{os.getpid()}-", dir=RATCHET_TMP))
+    before = os.environ.get("TMPDIR"), tempfile.tempdir
+    # RULE: a ratchet run's commands keep their temporary files in its folder
+    os.environ["TMPDIR"] = str(folder)
+    tempfile.tempdir = str(folder)
+    try:
+        yield folder
+    finally:
+        if before[0] is None:
+            os.environ.pop("TMPDIR", None)
+        else:
+            os.environ["TMPDIR"] = before[0]
+        tempfile.tempdir = before[1]
+        _remove(folder)
+        with contextlib.suppress(OSError):
+            RATCHET_TMP.rmdir()
+
+
 def measure(*, skip_mutation: bool = False, recorded: dict[str, Any] | None = None) -> dict[str, Any]:
     """Every measure, from the tree as it is."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -460,6 +560,12 @@ def main() -> int:
     parser.add_argument("--out", type=Path, help="where to write the levels measured now")
     parser.add_argument("--skip-mutation", action="store_true")
     args = parser.parse_args()
+    with stopped_cleanly(), run_folder():
+        return _act(args)
+
+
+def _act(args: argparse.Namespace) -> int:
+    """Do what was asked, inside the run's own folder."""
     if args.action == "measure":
         now = measure()
         if args.out:
