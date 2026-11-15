@@ -27,6 +27,7 @@ import os
 import pathlib
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -35,7 +36,7 @@ import tomllib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 #: One row per file: scripts/mutations/<the row's file, whole>/<the rule's words>.toml.
@@ -147,6 +148,27 @@ def line_of(text: str, pattern: str, occurrence: int) -> int:
     raise SystemExit(msg)
 
 
+@contextlib.contextmanager
+def stopped_cleanly() -> Iterator[None]:
+    """Let SIGTERM or SIGHUP unwind like Ctrl-C does, so every `finally` runs.
+
+    A timeout, a cancelled job or a closed terminal sends one of them, and by
+    default Python stops at once, leaving the mutated file and the run's folder.
+    """
+
+    def stop(signum: int, _frame: object) -> None:
+        raise SystemExit(128 + signum)
+
+    signals = [signal.SIGTERM, *([signal.SIGHUP] if hasattr(signal, "SIGHUP") else [])]
+    # RULE: a stopped run cleans up as an interrupted one does
+    before = {s: signal.signal(s, stop) for s in signals}
+    try:
+        yield
+    finally:
+        for s, handler in before.items():
+            signal.signal(s, handler)
+
+
 def repair() -> None:
     """Put back a file an earlier run was killed in the middle of mutating."""
     if not RECOVERY.is_file():
@@ -232,6 +254,9 @@ def run_suite() -> tuple[int, list[str]]:
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
     MUTATE_TMP.mkdir(parents=True, exist_ok=True)
     temporary = pathlib.Path(tempfile.mkdtemp(prefix="run-", dir=MUTATE_TMP))
+    # A file a test makes and forgets lands here too, and goes with the folder.
+    # RULE: a suite run's own temporary files stay in its folder
+    env["TMPDIR"] = str(temporary)
     try:
         r = subprocess.run(  # noqa: S603 - every argument is this script's own, none from outside
             [
@@ -283,7 +308,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write", type=pathlib.Path, help="write the evidence table here")
     args = parser.parse_args()
+    with stopped_cleanly():
+        try:
+            return _mutate_all(args)
+        finally:
+            # Each run's folder is gone by now; the one that held them goes too, if empty.
+            # RULE: a finished run leaves no empty folder behind
+            with contextlib.suppress(OSError):
+                MUTATE_TMP.rmdir()
 
+
+def _mutate_all(args: argparse.Namespace) -> int:
+    """Switch off each rule in turn, run the suite, put the file back, and report."""
     recover()
     # RULE: an empty rule table is not a crash
     # A scaffolded repository starts with a table of comments and no rows.

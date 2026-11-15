@@ -1,0 +1,5 @@
+[[rule]]
+name = "a ratchet run's commands keep their temporary files in its folder"
+file = "scripts/ratchet.py"
+find = '^\s*os\.environ\["TMPDIR"\] = str\(folder\)$'
+replace = 'pass'

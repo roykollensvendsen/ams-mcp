@@ -1,0 +1,5 @@
+[[rule]]
+name = "a suite run's own temporary files stay in its folder"
+file = "scripts/mutate.py"
+find = '^\s*env\["TMPDIR"\] = str\(temporary\)$'
+replace = 'pass'
