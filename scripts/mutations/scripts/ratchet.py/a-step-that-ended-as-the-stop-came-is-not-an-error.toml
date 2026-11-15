@@ -1,0 +1,5 @@
+[[rule]]
+name = "a step that ended as the stop came is not an error"
+file = "scripts/ratchet.py"
+find = '^\s*if step\.poll\(\) is None:$'
+replace = 'if True:'

@@ -1,4 +1,4 @@
-"""The check tools measure this checkout's own code, and stop every process a step started.
+"""The check tools measure this checkout's own code, and stop each step once and cleanly.
 
 Two worktrees that share one Python environment install the package from whichever ran
 `uv sync` last. A mutation run in one then switches a rule off there while the tests load
@@ -8,7 +8,6 @@ package comes from, and refuse to go on when it is not this checkout's `src/`.
 """
 
 import ast
-import contextlib
 import importlib.util
 import os
 import pathlib
@@ -106,23 +105,21 @@ def test_a_check_tool_never_imports_the_package_itself(script):
     assert "ams_mcp" not in imported
 
 
-STEP_WITH_A_CHILD = """
-import pathlib, signal, subprocess, sys
-tmp = pathlib.Path(sys.argv[1])
-child = '''
+COUNTING_STEP = """
 import pathlib, signal, sys, time
 tmp = pathlib.Path(sys.argv[1])
-def put_back(signum, frame):
-    (tmp / "put-back").write_text("")
-    sys.exit(1)
-signal.signal(signal.SIGINT, put_back)
+heard = 0
+
+def stop(signum, frame):
+    global heard
+    heard += 1
+
+signal.signal(signal.SIGINT, stop)
 (tmp / "ready").write_text("")
-time.sleep(5)  # never told: give up, and leave no put-back behind
-'''
-signal.signal(signal.SIGINT, signal.SIG_IGN)  # like uv run, which leaves Ctrl-C to what it started
-started = subprocess.Popen([sys.executable, "-c", child, str(tmp)], start_new_session=False)
-(tmp / "child.pid").write_text(str(started.pid))
-started.wait()
+while not heard:
+    time.sleep(0.05)
+time.sleep(1)  # the clean-up: any second Ctrl-C would arrive in here
+(tmp / "heard").write_text(str(heard))
 """
 FORWARDING_RATCHET = """
 import importlib.util, sys
@@ -130,30 +127,33 @@ spec = importlib.util.spec_from_file_location("ratchet", sys.argv[1])
 ratchet = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ratchet)
 with ratchet.stopped_cleanly():
-    ratchet._run(sys.executable, "-c", sys.argv[3], sys.argv[2])
+    ratchet._run("uv", "run", "--no-project", "python", "-c", sys.argv[3], sys.argv[2])
 """
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Windows has no process groups to signal")
-def test_a_stopped_step_s_own_children_hear_the_stop_too(tmp_path):
-    """A step is often `uv run`, and the process that must put a line back is the one it started."""
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows has no SIGINT to pass on")
+def test_a_stopped_uv_run_step_hears_ctrl_c_once(tmp_path):
+    """The step is `uv run`, which passes Ctrl-C on to the Python it started.
+
+    Sent to the whole group, the Python would hear it twice: once from the ratchet, once
+    through uv. Its clean-up must run to the end on the one it gets.
+    """
     command = [sys.executable, "-c", FORWARDING_RATCHET, str(ROOT / "scripts/ratchet.py"), str(tmp_path)]
-    command.append(STEP_WITH_A_CHILD)
+    command.append(COUNTING_STEP)
     ratchet = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
         ready = tmp_path / "ready"
+        deadline = time.monotonic() + 60
         while not ready.exists():
             assert ratchet.poll() is None, ratchet.communicate()[0]
+            assert time.monotonic() < deadline, "the step never started"
             time.sleep(0.05)
-        ratchet.send_signal(signal.SIGTERM)
+        ratchet.send_signal(signal.SIGTERM)  # to the ratchet alone, as when its job is cancelled
         out, _ = ratchet.communicate(timeout=60)
-        assert (tmp_path / "put-back").exists(), out
+        assert (tmp_path / "heard").read_text() == "1", out
     finally:
         if ratchet.poll() is None:
             ratchet.kill()
-        if (tmp_path / "child.pid").exists():
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(int((tmp_path / "child.pid").read_text()), signal.SIGKILL)
 
 
 def test_main_is_copied_by_its_id_whatever_protocol_git_is_set_to(tmp_path, monkeypatch):
@@ -178,3 +178,47 @@ def test_main_is_copied_by_its_id_whatever_protocol_git_is_set_to(tmp_path, monk
     monkeypatch.setattr(ratchet, "ROOT", repo)
     ratchet.copy_of(old, tmp_path / "base")
     assert (tmp_path / "base" / "notes.txt").read_text() == "the old main\n"
+
+
+class _StoppedWhileWaiting:
+    """A step whose wait is cut short by Ctrl-C, and which has or has not ended by then."""
+
+    def __init__(self, ended):
+        self.pid, self.returncode, self._ended, self._waits = 4321, None, ended, 0
+
+    def wait(self):
+        self._waits += 1
+        if self._waits == 1:
+            raise KeyboardInterrupt
+        return 0
+
+    def poll(self):
+        return 0 if self._ended else None
+
+
+def _stop_finds_no_step(ratchet, monkeypatch, *, ended):
+    monkeypatch.setattr(ratchet.subprocess, "Popen", lambda *_args, **_kwargs: _StoppedWhileWaiting(ended))
+
+    def no_such_process(*_args):
+        raise ProcessLookupError
+
+    monkeypatch.setattr(ratchet.os, "kill", no_such_process)
+
+
+def test_a_step_that_ended_as_the_stop_came_is_not_an_error(monkeypatch):
+    """The stop is what the caller hears, not that the step had already gone."""
+    ratchet = _loaded("ratchet")
+    _stop_finds_no_step(ratchet, monkeypatch, ended=True)
+    with pytest.raises(KeyboardInterrupt):
+        ratchet._run("step")  # noqa: SLF001
+
+
+def test_a_live_step_the_stop_cannot_reach_is_an_error(monkeypatch):
+    """Ignoring that would leave a rule switched off with nobody told to put it back."""
+    ratchet = _loaded("ratchet")
+    _stop_finds_no_step(ratchet, monkeypatch, ended=False)
+    # BaseException: a swallowed error lets the Ctrl-C through, which must fail this test,
+    # not stop the whole test run.
+    with pytest.raises(BaseException) as raised:  # noqa: PT011
+        ratchet._run("step")  # noqa: SLF001
+    assert raised.type is ProcessLookupError
