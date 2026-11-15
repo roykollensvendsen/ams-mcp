@@ -342,7 +342,8 @@ def _run(
             step.wait()
         except BaseException:
             # RULE: a stopped measurement lets its step put back what it changed
-            step.send_signal(signal.SIGINT)
+            # The whole group, as Ctrl-C in a terminal would: pytest's own children too.
+            os.killpg(step.pid, signal.SIGINT)
             step.wait()  # no time limit: these runs never have one
             raise
         out.seek(0)
@@ -505,6 +506,11 @@ def run_folder() -> Iterator[Path]:
             RATCHET_TMP.rmdir()
 
 
+#: Asking another repository for a commit by its id needs protocol 2, or a source that
+#: allows any id. Pinned, so a git set to protocol 1 still finds a commit no branch points at.
+BY_ID = ("-c", "protocol.version=2", "-c", "uploadpack.allowAnySHA1InWant=true")
+
+
 def copy_of(ref: str, copy: Path) -> None:
     """Check `ref` out into `copy`, a repository holding that one commit and no other ref.
 
@@ -519,7 +525,7 @@ def copy_of(ref: str, copy: Path) -> None:
     # RULE: the base is measured where no other branch can be seen
     steps = (
         ("git", "init", "-q"),
-        ("git", "fetch", "-q", "--depth", "1", str(ROOT), sha.stdout.strip()),
+        ("git", *BY_ID, "fetch", "-q", "--depth", "1", str(ROOT), sha.stdout.strip()),
         ("git", "checkout", "-q", "--detach", "FETCH_HEAD"),
     )
     for step in steps:

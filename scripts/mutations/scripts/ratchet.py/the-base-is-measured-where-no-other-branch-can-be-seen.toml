@@ -1,5 +1,5 @@
 [[rule]]
 name = "the base is measured where no other branch can be seen"
 file = "scripts/ratchet.py"
-find = '^\s*\("git", "fetch", "-q", "--depth", "1", str\(ROOT\), sha\.stdout\.strip\(\)\),$'
-replace = '("git", "fetch", "-q", str(ROOT), "refs/heads/*:refs/remotes/o/*"),'
+find = '^\s*\("git", \*BY_ID, "fetch", "-q", "--depth", "1", str\(ROOT\), sha\.stdout\.strip\(\)\),$'
+replace = '("git", *BY_ID, "fetch", "-q", str(ROOT), "refs/heads/*:refs/remotes/o/*"),'
