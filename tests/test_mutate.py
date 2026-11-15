@@ -110,9 +110,10 @@ def test_an_empty_rule_table_is_not_a_crash(tmp_path, monkeypatch, capsys):
     gate is fail on it.
     """
     mutate = loaded()
-    table = tmp_path / "mutations.toml"
-    table.write_text("# Every rule this project enforces, and the line that carries it.\n")
-    monkeypatch.setattr(mutate, "TABLE", table)
+    rows = tmp_path / "mutations"
+    rows.mkdir()
+    (rows / "README.md").write_text("# One row per rule\n")
+    monkeypatch.setattr(mutate, "ROWS", rows)
     monkeypatch.setattr(mutate, "ROOT", tmp_path)
     # main() sweeps MUTATE_TMP at start. Inside a mutation run the real one holds the
     # outer run's --basetemp, and sweeping it pulls other tests' tmp_path from under them.

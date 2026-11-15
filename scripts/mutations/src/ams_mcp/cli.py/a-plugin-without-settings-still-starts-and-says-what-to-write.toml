@@ -1,0 +1,5 @@
+[[rule]]
+name = "a plugin without settings still starts and says what to write"
+file = "src/ams_mcp/cli.py"
+find = 'return AmsService\(Unconfigured\(str\(error\)\), timezone=local_timezone\(\)\)'
+replace = 'raise'

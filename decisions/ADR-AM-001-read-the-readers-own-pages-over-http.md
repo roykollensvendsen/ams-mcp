@@ -35,7 +35,7 @@ GET, only when a tool is asked, and keeps each for three seconds. No other
 path is reachable: an allow-list refuses anything else before a request is
 made, the address in the settings must be a bare host, redirects are not
 followed, and no login is ever sent. Each of those is a rule with a test and a
-row in `scripts/mutations.toml`.
+row under `scripts/mutations/`.
 
 ## Consequences
 

@@ -1,0 +1,5 @@
+[[rule]]
+name = "only an allow-listed page is ever asked for"
+file = "src/ams_mcp/reader.py"
+find = 'if name not in PAGES:'
+replace = 'if False:'

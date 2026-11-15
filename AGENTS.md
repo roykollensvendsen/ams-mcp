@@ -26,7 +26,7 @@ over HTTP, and only reads, is [ADR-AM-001](decisions/ADR-AM-001-read-the-readers
    line, whatever an assistant's own attribution says;
    `scripts/no_session_links.py` refuses it.
 4. **The simulator first.** Every 'say' it gives starts "Simulated:".
-5. Every line marked `# RULE:` has a row in `scripts/mutations.toml` and a
+5. Every line marked `# RULE:` has a row file under `scripts/mutations/` and a
    test named after it, and `uv run python scripts/mutate.py` must show each
    rule's own test going red.
 

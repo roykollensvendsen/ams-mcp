@@ -1,0 +1,5 @@
+[[rule]]
+name = "a page is asked for at most twice"
+file = "src/ams_mcp/reader.py"
+find = 'for _ in range\(TRIES\):'
+replace = 'for _ in range(TRIES + 1):'
