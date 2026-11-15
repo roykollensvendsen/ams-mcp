@@ -1,4 +1,4 @@
-"""The check tools measure this checkout's own code, never another checkout's installed copy.
+"""The check tools measure this checkout's own code, and stop every process a step started.
 
 Two worktrees that share one Python environment install the package from whichever ran
 `uv sync` last. A mutation run in one then switches a rule off there while the tests load
@@ -8,10 +8,14 @@ package comes from, and refuse to go on when it is not this checkout's `src/`.
 """
 
 import ast
+import contextlib
 import importlib.util
 import os
 import pathlib
+import signal
+import subprocess
 import sys
+import time
 
 import pytest
 
@@ -100,3 +104,77 @@ def test_a_check_tool_never_imports_the_package_itself(script):
     imported = {alias.name.split(".")[0] for node in imports for alias in node.names}
     imported |= {(node.module or "").split(".")[0] for node in nodes if isinstance(node, ast.ImportFrom)}
     assert "ams_mcp" not in imported
+
+
+STEP_WITH_A_CHILD = """
+import pathlib, signal, subprocess, sys
+tmp = pathlib.Path(sys.argv[1])
+child = '''
+import pathlib, signal, sys, time
+tmp = pathlib.Path(sys.argv[1])
+def put_back(signum, frame):
+    (tmp / "put-back").write_text("")
+    sys.exit(1)
+signal.signal(signal.SIGINT, put_back)
+(tmp / "ready").write_text("")
+time.sleep(5)  # never told: give up, and leave no put-back behind
+'''
+signal.signal(signal.SIGINT, signal.SIG_IGN)  # like uv run, which leaves Ctrl-C to what it started
+started = subprocess.Popen([sys.executable, "-c", child, str(tmp)], start_new_session=False)
+(tmp / "child.pid").write_text(str(started.pid))
+started.wait()
+"""
+FORWARDING_RATCHET = """
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ratchet", sys.argv[1])
+ratchet = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ratchet)
+with ratchet.stopped_cleanly():
+    ratchet._run(sys.executable, "-c", sys.argv[3], sys.argv[2])
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows has no process groups to signal")
+def test_a_stopped_step_s_own_children_hear_the_stop_too(tmp_path):
+    """A step is often `uv run`, and the process that must put a line back is the one it started."""
+    command = [sys.executable, "-c", FORWARDING_RATCHET, str(ROOT / "scripts/ratchet.py"), str(tmp_path)]
+    command.append(STEP_WITH_A_CHILD)
+    ratchet = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        ready = tmp_path / "ready"
+        while not ready.exists():
+            assert ratchet.poll() is None, ratchet.communicate()[0]
+            time.sleep(0.05)
+        ratchet.send_signal(signal.SIGTERM)
+        out, _ = ratchet.communicate(timeout=60)
+        assert (tmp_path / "put-back").exists(), out
+    finally:
+        if ratchet.poll() is None:
+            ratchet.kill()
+        if (tmp_path / "child.pid").exists():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int((tmp_path / "child.pid").read_text()), signal.SIGKILL)
+
+
+def test_main_is_copied_by_its_id_whatever_protocol_git_is_set_to(tmp_path, monkeypatch):
+    """Git's older protocol refuses a commit no branch points at, unless asked not to."""
+    ratchet = _loaded("ratchet")
+    settings = tmp_path / "gitconfig"
+    settings.write_text("[protocol]\n\tversion = 0\n[user]\n\temail = t@example.org\n\tname = t\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(settings))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout
+
+    git("init", "-q", "-b", "main")
+    (repo / "notes.txt").write_text("the old main\n")
+    git("add", "notes.txt")
+    git("commit", "-q", "-m", "the old main")
+    old = git("rev-parse", "HEAD").strip()
+    (repo / "notes.txt").write_text("the new main\n")
+    git("commit", "-q", "-am", "the new main")
+    monkeypatch.setattr(ratchet, "ROOT", repo)
+    ratchet.copy_of(old, tmp_path / "base")
+    assert (tmp_path / "base" / "notes.txt").read_text() == "the old main\n"
