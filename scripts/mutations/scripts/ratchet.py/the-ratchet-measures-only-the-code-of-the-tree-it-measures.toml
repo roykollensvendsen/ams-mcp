@@ -1,0 +1,5 @@
+[[rule]]
+name = "the ratchet measures only the code of the tree it measures"
+file = "scripts/ratchet.py"
+find = '^\s*if not found\.is_relative_to\(source\):$'
+replace = 'if False:'

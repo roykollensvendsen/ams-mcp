@@ -14,7 +14,6 @@ import importlib.util
 import json
 import os
 import pathlib
-import shutil
 import signal
 import subprocess
 import sys
@@ -57,12 +56,19 @@ def _project(tmp_path, test):
     project = tmp_path / "project"
     for folder in ("scripts/mutations/src/x.py", "src", "tests"):
         (project / folder).mkdir(parents=True)
-    shutil.copy(ROOT / "scripts/mutate.py", project / "scripts/mutate.py")
+    # The runner checks that the suite loads its package from this project's src/.
+    runner = (ROOT / "scripts/mutate.py").read_text().replace('PACKAGE = "ams_mcp"', 'PACKAGE = "x"')
+    (project / "scripts/mutate.py").write_text(runner)
     (project / "scripts/mutations/src/x.py/the-value-is-one.toml").write_text(ROW)
     (project / "src/x.py").write_text("# RULE: the value is one\nvalue = 1\n")
     (project / "tests/test_x.py").write_text(test)
     (project / "pyproject.toml").write_text('[tool.pytest.ini_options]\npythonpath = ["src"]\n')
     return project
+
+
+def _its_own(project):
+    """What makes a plain `import x` in `project` find its own src/, as the suite does."""
+    return {"PYTHONPATH": str(project / "src")}
 
 
 def _load(path, name, tmp, monkeypatch):
@@ -78,7 +84,7 @@ def _load(path, name, tmp, monkeypatch):
 
 def _stop_when_started(command, started, tmp, cwd):
     """Start `command`, send it SIGTERM once `started` exists, and give back its exit code."""
-    run = subprocess.Popen(command, cwd=cwd, env={**os.environ, "TMPDIR": str(tmp)})
+    run = subprocess.Popen(command, cwd=cwd, env={**os.environ, "TMPDIR": str(tmp), **_its_own(cwd)})
     deadline = time.monotonic() + 30
     while not started.exists():
         assert run.poll() is None, "the run ended before it got going"
@@ -99,6 +105,7 @@ def test_a_suite_run_s_own_temporary_files_stay_in_its_folder(tmp_path, monkeypa
 def test_a_finished_run_leaves_no_empty_folder_behind(tmp_path, monkeypatch):
     project = _project(tmp_path, LEAKY_TEST.replace("tempfile.mkstemp()", "pass"))
     mutate = _load(project / "scripts/mutate.py", "mutate_finished", tmp_path / "tmp", monkeypatch)
+    monkeypatch.setenv("PYTHONPATH", _its_own(project)["PYTHONPATH"])
     monkeypatch.setattr("sys.argv", ["mutate.py"])
     assert mutate.main() == 0
     assert list((tmp_path / "tmp").iterdir()) == []
@@ -290,7 +297,7 @@ def _ctrl_c_then_a_stop(command, tmp_path, cwd):
     run = subprocess.Popen(
         command,
         cwd=cwd,
-        env={**os.environ, "TMPDIR": str(tmp_path / "tmp")},
+        env={**os.environ, "TMPDIR": str(tmp_path / "tmp"), **_its_own(cwd)},
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
