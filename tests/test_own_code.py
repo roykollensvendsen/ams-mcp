@@ -8,6 +8,7 @@ package comes from, and refuse to go on when it is not this checkout's `src/`.
 """
 
 import ast
+import contextlib
 import importlib.util
 import os
 import pathlib
@@ -106,7 +107,7 @@ def test_a_check_tool_never_imports_the_package_itself(script):
 
 
 COUNTING_STEP = """
-import pathlib, signal, sys, time
+import os, pathlib, signal, sys, time
 tmp = pathlib.Path(sys.argv[1])
 heard = 0
 
@@ -115,8 +116,10 @@ def stop(signum, frame):
     heard += 1
 
 signal.signal(signal.SIGINT, stop)
+(tmp / "step").write_text(f"{os.getpid()} {os.getpgid(0)}")  # the test ends it in any case
 (tmp / "ready").write_text("")
-while not heard:
+deadline = time.monotonic() + 20  # never told: give up, rather than wait for ever
+while not heard and time.monotonic() < deadline:
     time.sleep(0.05)
 time.sleep(1)  # the clean-up: any second Ctrl-C would arrive in here
 (tmp / "heard").write_text(str(heard))
@@ -129,6 +132,23 @@ spec.loader.exec_module(ratchet)
 with ratchet.stopped_cleanly():
     ratchet._run("uv", "run", "--no-project", "python", "-c", sys.argv[3], sys.argv[2])
 """
+
+
+def _end_the_step(record):
+    """End the step and what started it, which killing the ratchet leaves running.
+
+    The step's group is its own session, and only that is killed: when the ratchet
+    starts it without a session of its own, the group is this test run's, and killing
+    it would end the run with it.
+    """
+    if not record.exists():
+        return
+    pid, group = (int(n) for n in record.read_text().split())
+    with contextlib.suppress(ProcessLookupError):
+        if group == os.getpgrp():
+            os.kill(pid, signal.SIGKILL)
+        else:
+            os.killpg(group, signal.SIGKILL)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows has no SIGINT to pass on")
@@ -154,6 +174,8 @@ def test_a_stopped_uv_run_step_hears_ctrl_c_once(tmp_path):
     finally:
         if ratchet.poll() is None:
             ratchet.kill()
+            ratchet.wait()
+        _end_the_step(tmp_path / "step")
 
 
 def test_main_is_copied_by_its_id_whatever_protocol_git_is_set_to(tmp_path, monkeypatch):
