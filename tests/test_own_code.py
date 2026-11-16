@@ -12,6 +12,7 @@ import contextlib
 import importlib.util
 import os
 import pathlib
+import shutil
 import signal
 import subprocess
 import sys
@@ -152,12 +153,19 @@ def _end_the_step(record):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows has no SIGINT to pass on")
+@pytest.mark.skipif(
+    shutil.which("uv") is None and not os.environ.get("CI"),
+    reason="needs uv, which the ratchet runs its steps through (in CI, its absence fails instead)",
+)
 def test_a_stopped_uv_run_step_hears_ctrl_c_once(tmp_path):
     """The step is `uv run`, which passes Ctrl-C on to the Python it started.
 
     Sent to the whole group, the Python would hear it twice: once from the ratchet, once
     through uv. Its clean-up must run to the end on the one it gets.
     """
+    # In CI this proof must not drop out unseen: there a missing uv fails, not skips.
+    if shutil.which("uv") is None:
+        pytest.fail("CI has no uv, so the proof that a stopped step hears Ctrl-C once cannot run")
     command = [sys.executable, "-c", FORWARDING_RATCHET, str(ROOT / "scripts/ratchet.py"), str(tmp_path)]
     command.append(COUNTING_STEP)
     ratchet = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -244,3 +252,33 @@ def test_a_live_step_the_stop_cannot_reach_is_an_error(monkeypatch):
     with pytest.raises(BaseException) as raised:  # noqa: PT011
         ratchet._run("step")  # noqa: SLF001
     assert raised.type is ProcessLookupError
+
+
+@pytest.mark.parametrize(
+    ("ci", "outcome"), [("", "1 skipped"), ("true", "1 failed")], ids=["locally", "in CI"]
+)
+def test_without_uv_the_ctrl_c_test_is_skipped_locally_and_fails_in_ci(tmp_path, ci, outcome):
+    """A machine without uv cannot run the proof; only CI must never let it pass unseen."""
+    bare = tmp_path / "bin"  # a path holding this Python and nothing else, so no uv
+    bare.mkdir()
+    (bare / "python").symlink_to(sys.executable)
+    env = {**os.environ, "PATH": str(bare), "CI": ci}
+    node = f"{pathlib.Path(__file__).name}::test_a_stopped_uv_run_step_hears_ctrl_c_once"
+    said = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            f"--basetemp={tmp_path / 'run'}",
+            node,
+        ],
+        cwd=pathlib.Path(__file__).parent,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert outcome in said.stdout, said.stdout
