@@ -103,7 +103,8 @@ def test_a_page_waiting_its_turn_still_gives_up_within_its_own_time(monkeypatch,
 
     async def one_waits_behind_another():
         ahead = asyncio.create_task(r.page("data.json"))
-        await fake.serving.wait()  # the page ahead holds the turn and is being read
+        # The page ahead holds the turn and is being read; one that never gets there fails.
+        await asyncio.wait_for(fake.serving.wait(), 10)
         monkeypatch.setattr(reader, "TIMEOUT", 0.3)
         if stall:  # a busy machine: the loop wakes late, past the waiting page's limit
             asyncio.get_running_loop().call_later(0.01, time.sleep, stall)

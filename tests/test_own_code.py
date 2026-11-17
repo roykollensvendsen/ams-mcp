@@ -196,7 +196,9 @@ def test_main_is_copied_by_its_id_whatever_protocol_git_is_set_to(tmp_path, monk
     repo.mkdir()
 
     def git(*args):
-        return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout
+        return subprocess.run(
+            ["git", *args], cwd=repo, check=True, capture_output=True, text=True, timeout=60
+        ).stdout
 
     git("init", "-q", "-b", "main")
     (repo / "notes.txt").write_text("the old main\n")
@@ -280,5 +282,6 @@ def test_without_uv_the_ctrl_c_test_is_skipped_locally_and_fails_in_ci(tmp_path,
         capture_output=True,
         text=True,
         check=False,
+        timeout=120,
     )
     assert outcome in said.stdout, said.stdout

@@ -19,6 +19,8 @@ from mcp.client.stdio import stdio_client
 
 #: Seconds a cold start may take to list the tools, kept well inside the bridge's 15.
 COLD_START_WITHIN = 10.0
+#: Seconds a test talks to the server before giving up: one that never answers fails, not hangs.
+ANSWERS_WITHIN = 60
 TOOLS = {"ams_now", "ams_energy", "ams_price", "ams_capacity", "ams_history"}
 
 
@@ -30,7 +32,7 @@ def _listed(args, env=None):
             return {tool.name for tool in (await session.list_tools()).tools}
 
     started = time.monotonic()
-    names = asyncio.run(run())
+    names = asyncio.run(asyncio.wait_for(run(), ANSWERS_WITHIN))
     return names, time.monotonic() - started
 
 
@@ -65,7 +67,7 @@ def test_a_plugin_without_settings_still_starts_and_says_what_to_write(tmp_path)
             answer = (await session.call_tool("ams_now", {})).structured_content
             return names, answer
 
-    names, answer = asyncio.run(run())
+    names, answer = asyncio.run(asyncio.wait_for(run(), ANSWERS_WITHIN))
     assert names == TOOLS
     assert answer["success"] is False
     assert str(missing) in answer["say"]
