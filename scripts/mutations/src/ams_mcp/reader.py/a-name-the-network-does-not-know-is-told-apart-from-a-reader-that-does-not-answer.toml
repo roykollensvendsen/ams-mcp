@@ -1,0 +1,5 @@
+[[rule]]
+name = "a name the network does not know is told apart from a reader that does not answer"
+file = "src/ams_mcp/reader.py"
+find = '^\s*if _name_not_found\(error\):$'
+replace = 'if False:'

@@ -109,6 +109,21 @@ def test_a_reader_that_does_not_answer_is_an_error():
         asyncio.run(_reader(handler).page("data.json"))
 
 
+def test_a_name_the_network_does_not_know_is_told_apart_from_a_reader_that_does_not_answer():
+    """A made-up name in a domain set aside never to exist, so no reader is ever asked."""
+    with pytest.raises(reader.NameNotFoundError):
+        asyncio.run(HttpReader("reader.invalid").page("data.json"))
+
+
+def test_a_reader_that_does_not_answer_is_not_called_an_unknown_name():
+    def handler(request):
+        raise httpx.ConnectError("Connection refused", request=request)
+
+    with pytest.raises(reader.ReaderError) as raised:
+        asyncio.run(_reader(handler).page("data.json"))
+    assert not isinstance(raised.value, reader.NameNotFoundError)
+
+
 def test_the_answer_says_when_it_was_read():
     r = _reader(lambda q: httpx.Response(200, content=json.dumps({"a": 1})), wall=lambda: 1794402646.0)
     page = asyncio.run(r.page("data.json"))

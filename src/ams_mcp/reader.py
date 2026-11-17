@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
@@ -46,6 +47,10 @@ CACHE_FOR = 3.0
 
 class ReaderError(RuntimeError):
     """The reader did not answer, or not with a page."""
+
+
+class NameNotFoundError(ReaderError):
+    """The reader's name is not known on the home network, so it was never asked."""
 
 
 class StrangeAnswerError(ReaderError):
@@ -129,6 +134,10 @@ class HttpReader:
         try:
             response = await self._read(name)
         except httpx.HTTPError as error:
+            # RULE: a name the network does not know is told apart from a reader that does not answer
+            if _name_not_found(error):
+                msg = f"the reader's name was not found: {self._base.removeprefix('http://')}"
+                raise NameNotFoundError(msg) from error
             msg = f"the reader did not answer: {type(error).__name__}"
             raise ReaderError(msg) from error
         if response.status_code != httpx.codes.OK:
@@ -166,3 +175,13 @@ class HttpReader:
         ) as client:
             # RULE: a page is only ever read with get
             return await client.get(f"{self._base}/{name}")
+
+
+def _name_not_found(error: BaseException) -> bool:
+    """Whether a failed request failed at looking up the reader's name, however deep that lies."""
+    seen: BaseException | None = error
+    while seen is not None:
+        if isinstance(seen, socket.gaierror):
+            return True
+        seen = seen.__cause__ or seen.__context__
+    return False

@@ -1,5 +1,5 @@
 [[rule]]
 name = "a reader that does not answer is said, and nothing is guessed"
 file = "src/ams_mcp/service.py"
-find = 'return \{"success": False, "say": UNREACHABLE\.format\(where=self\._where\)\}'
+find = 'return \{"success": False, "say": unreachable\.format\(where=self\._where\)\}'
 replace = 'return {"success": True, "say": "Drawing 0.00 kW from the grid now."}'
