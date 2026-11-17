@@ -33,6 +33,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from typing import TYPE_CHECKING
 
@@ -485,7 +486,10 @@ def _mutate_all(args: argparse.Namespace) -> int:
             # run that hangs would otherwise leave no word of which rule it hung on.
             # RULE: a mutation run names each rule before it tests it
             print(f"testing  {rule['name']}", flush=True)  # noqa: T201
+            started = time.monotonic()
             count, failed = run_suite()
+            # RULE: a rule's result line says how long its tests took
+            took = time.monotonic() - started
             if not restore(path, text, mutated):
                 lost.append(rule["file"])
             standing = None
@@ -495,7 +499,7 @@ def _mutate_all(args: argparse.Namespace) -> int:
             by_its_own = own in failed
             results.append((rule["name"], count, own, by_its_own))
             verdict = "KILLED  " if by_its_own else ("BY LUCK " if count else "SURVIVED")
-            print(f"{verdict} {rule['name']}: {count}", flush=True)  # noqa: T201
+            print(f"{verdict} {rule['name']}: {count} ({took:.0f} s)", flush=True)  # noqa: T201
     finally:
         if standing is not None:
             restore(*standing)
