@@ -21,6 +21,7 @@ import tempfile
 import time
 
 import pytest
+from bounded import WITHIN, run_bounded
 
 ROOT = pathlib.Path(__file__).parent.parent
 
@@ -85,13 +86,13 @@ def _load(path, name, tmp, monkeypatch):
 def _stop_when_started(command, started, tmp, cwd):
     """Start `command`, send it SIGTERM once `started` exists, and give back its exit code."""
     run = subprocess.Popen(command, cwd=cwd, env={**os.environ, "TMPDIR": str(tmp), **_its_own(cwd)})
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + WITHIN
     while not started.exists():
         assert run.poll() is None, "the run ended before it got going"
         assert time.monotonic() < deadline, "the run never got going"
         time.sleep(0.05)
     run.send_signal(signal.SIGTERM)
-    return run.wait(timeout=30)
+    return run.wait(timeout=WITHIN)
 
 
 def test_a_suite_run_s_own_temporary_files_stay_in_its_folder(tmp_path, monkeypatch):
@@ -130,12 +131,11 @@ def _ratchet(tmp, monkeypatch):
 def test_a_ratchet_run_s_commands_keep_their_temporary_files_in_its_folder(tmp_path, monkeypatch):
     ratchet = _ratchet(tmp_path / "tmp", monkeypatch)
     with ratchet.run_folder() as folder:
-        said = subprocess.run(
+        said = run_bounded(
             [sys.executable, "-c", "import tempfile; print(tempfile.gettempdir())"],
             capture_output=True,
             text=True,
             check=True,
-            timeout=60,
         )
         assert pathlib.Path(said.stdout.strip()) == folder
     assert list((tmp_path / "tmp").iterdir()) == []
@@ -286,7 +286,7 @@ def test_a_shared_folder_for_runs_that_is_not_ours_alone_is_refused(tmp_path, mo
 
 
 def _wait_for(path, run):
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + WITHIN
     while not path.exists():
         assert run.poll() is None, run.communicate()[0]
         assert time.monotonic() < deadline, f"never saw {path.name}"
@@ -307,7 +307,7 @@ def _ctrl_c_then_a_stop(command, tmp_path, cwd):
     run.send_signal(signal.SIGINT)
     _wait_for(tmp_path / "cleaning", run)
     run.send_signal(signal.SIGTERM)
-    return run.communicate(timeout=60)[0]
+    return run.communicate(timeout=WITHIN)[0]
 
 
 SLOW_MUTATE = """
@@ -410,7 +410,7 @@ def test_a_stopped_measurement_lets_its_step_put_back_what_it_changed(tmp_path, 
     try:
         _wait_for(tmp_path / "ready", ratchet)
         ratchet.send_signal(stop)  # to the ratchet alone, as when its job is cancelled
-        out, _ = ratchet.communicate(timeout=60)
+        out, _ = ratchet.communicate(timeout=WITHIN)
         assert (tmp_path / "put-back").exists(), out
     finally:
         if ratchet.poll() is None:
@@ -479,7 +479,7 @@ def test_the_base_is_measured_where_no_other_branch_can_be_seen(tmp_path, monkey
     repo.mkdir()
 
     def git(*args):
-        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, timeout=60)
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, timeout=WITHIN)
 
     for args in (
         ["init", "-q", "-b", "main"],
@@ -503,7 +503,7 @@ def test_the_base_is_measured_where_no_other_branch_can_be_seen(tmp_path, monkey
         check=True,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=WITHIN,
     ).stdout
     assert (copy / "notes.txt").read_text() == "main\n"
     assert "under review" not in seen
