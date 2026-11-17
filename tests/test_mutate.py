@@ -146,3 +146,48 @@ def test_no_rows_when_rules_are_marked_is_a_failure(tmp_path, monkeypatch, capsy
     said = capsys.readouterr().out
     assert "1 rule is marked" in said
     assert "git checkout origin/main -- scripts/mutations" in said
+
+
+class _Pipe:
+    """Output that, like a pipe in CI, shows only what has been flushed."""
+
+    def __init__(self):
+        self.held, self.shown = "", ""
+
+    def write(self, text):
+        self.held += text
+        return len(text)
+
+    def flush(self):
+        self.shown, self.held = self.shown + self.held, ""
+
+
+def test_a_mutation_run_names_each_rule_before_it_tests_it(tmp_path, monkeypatch):
+    """The name must be out of the process, not in its buffer, by the time the suite starts.
+
+    In CI the output is a pipe, which Python holds back until it is full. A run that hung
+    on one rule left nothing in the log to say which, and its result line has to get out too.
+    """
+    mutate = loaded()
+    (tmp_path / "src" / "pkg").mkdir(parents=True)
+    (tmp_path / "src" / "pkg" / "core.py").write_text("# RULE: a guard holds\non = True\n")
+    rows = tmp_path / "mutations" / "src" / "pkg" / "core.py"
+    rows.mkdir(parents=True)
+    (rows / "a-guard-holds.toml").write_text(
+        '[[rule]]\nname = "a guard holds"\nfile = "src/pkg/core.py"\n'
+        "find = '^on = True$'\nreplace = 'on = False'\n"
+    )
+    isolated(mutate, tmp_path, monkeypatch, tmp_path / "mutations")
+    monkeypatch.setattr(mutate, "own_code", lambda _env: None)  # a scratch tree has no package
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    pipe, seen = _Pipe(), []
+    monkeypatch.setattr("sys.stdout", pipe)
+
+    def suite():
+        seen.append(pipe.shown)
+        return 1, ["test_a_guard_holds"]
+
+    monkeypatch.setattr(mutate, "run_suite", suite)
+    mutate.main()
+    assert "testing  a guard holds" in seen[0]
+    assert "KILLED   a guard holds: 1" in pipe.shown

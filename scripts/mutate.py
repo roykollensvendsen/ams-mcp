@@ -475,6 +475,10 @@ def _mutate_all(args: argparse.Namespace) -> int:
             RECOVERY.write_text(json.dumps({"file": rule["file"], "original": text, "mutated": mutated}))
             path.write_text(mutated)
             standing = (path, text, mutated)
+            # Sent at once, not held until the run ends: in CI the output is a pipe, so a
+            # run that hangs would otherwise leave no word of which rule it hung on.
+            # RULE: a mutation run names each rule before it tests it
+            print(f"testing  {rule['name']}", flush=True)  # noqa: T201
             count, failed = run_suite()
             if not restore(path, text, mutated):
                 lost.append(rule["file"])
@@ -485,7 +489,7 @@ def _mutate_all(args: argparse.Namespace) -> int:
             by_its_own = own in failed
             results.append((rule["name"], count, own, by_its_own))
             verdict = "KILLED  " if by_its_own else ("BY LUCK " if count else "SURVIVED")
-            print(f"{verdict} {rule['name']}: {count}")  # noqa: T201
+            print(f"{verdict} {rule['name']}: {count}", flush=True)  # noqa: T201
     finally:
         if standing is not None:
             restore(*standing)
