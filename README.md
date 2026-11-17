@@ -59,6 +59,12 @@ address = "192.0.2.10"     # the reader's address on your network
 timezone = "Europe/Oslo"   # optional; the computer's own by default
 ```
 
+The address can also be the name your router gives the reader, such as
+`amsreader.invalid`. A name keeps working when the router hands the reader a
+new number, and many routers cannot set one aside. If the router ever stops
+knowing the name, a question says so, and that you can write the number in
+its place.
+
 Without it, a question says where the file should be:
 
 ```console

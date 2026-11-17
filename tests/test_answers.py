@@ -16,7 +16,7 @@ import httpx
 import pytest
 
 from ams_mcp import service
-from ams_mcp.reader import HttpReader, Page, ReaderError
+from ams_mcp.reader import HttpReader, NameNotFoundError, Page, ReaderError
 from ams_mcp.service import AmsService
 from ams_mcp.simulator import recorded
 
@@ -27,11 +27,14 @@ READ_AT = 1794402646.0  # 2026-11-11 14:10:46 in Oslo
 class Pages:
     """The recorded pages, read at READ_AT, with any changed as a test asks."""
 
-    def __init__(self, changes=None, read_at=READ_AT, broken=False):
+    def __init__(self, changes=None, read_at=READ_AT, broken=False, unknown_name=False):
         self.changes, self.read_at, self.broken, self.asked = changes or {}, read_at, broken, []
+        self.unknown_name = unknown_name
 
     async def page(self, name):
         self.asked.append(name)
+        if self.unknown_name:
+            raise NameNotFoundError("the reader's name was not found: gaierror")
         if self.broken:
             raise ReaderError("the reader did not answer: ConnectTimeout")
         body = copy.deepcopy(recorded(name))
@@ -220,6 +223,21 @@ def test_a_reader_that_does_not_answer_is_said_and_nothing_is_guessed():
         assert "kW" not in a["say"], tool
 
 
+def test_a_reader_whose_name_is_not_found_is_said_as_a_name_not_its_power():
+    """A reader named rather than numbered can drop out of the router's list.
+
+    Saying "check its power and Wi-Fi" then sends the owner to the wrong box.
+    """
+    for tool in ("now", "energy", "price", "capacity", "history"):
+        a = _ask(tool, Pages(unknown_name=True))
+        assert a["success"] is False, tool
+        assert a["say"].startswith(
+            "The meter reader's name reader.example isn't known on the home network."
+        ), tool
+        assert "power" not in a["say"], tool
+        assert "IP address" in a["say"], tool
+
+
 def test_a_page_in_a_shape_the_firmware_does_not_give_is_refused():
     a = _ask("now", Pages({"data.json": lambda b: b.pop("ea")}))
     assert a["success"] is False
@@ -237,6 +255,7 @@ def _failures():
                 body[k] = None
 
     yield _ask("now", Pages(broken=True))
+    yield _ask("now", Pages(unknown_name=True))
     yield _ask("now", Pages({"data.json": lambda b: b.pop("ea")}))
     yield _ask("price", Pages({"energyprice.json": empty}))
     yield _ask("history", period="year")
@@ -252,7 +271,7 @@ def test_every_error_says_what_is_wrong_and_what_to_do_next():
 
 
 def test_an_error_about_the_reader_names_where_it_is():
-    for answer in list(_failures())[:3]:
+    for answer in list(_failures())[:4]:
         assert "reader.example" in answer["say"], answer["say"]
 
 

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from ams_mcp import pages, say
 from ams_mcp.pages import FIRMWARE, PageError
-from ams_mcp.reader import ReaderError, StrangeAnswerError
+from ams_mcp.reader import NameNotFoundError, ReaderError, StrangeAnswerError
 from ams_mcp.settings import SettingsError
 
 if TYPE_CHECKING:
@@ -34,6 +34,11 @@ SPOKEN_HOURS = 3
 #: Every failure says what is wrong and what to do next; {where} is the reader's address.
 UNREACHABLE = (
     "The meter reader at {where} doesn't answer. Check that it has power and is on the Wi-Fi, then ask again."
+)
+NOT_FOUND = (
+    "The meter reader's name {where} isn't known on the home network. Check that the router still lists "
+    "the reader, or write its IP address as [reader] address in ams-mcp's settings file. "
+    "Then restart the plugin."
 )
 UNKNOWN = (
     "The meter reader at {where} answered in a shape this plugin doesn't know; it was written for firmware "
@@ -106,9 +111,11 @@ class AmsService:
         except StrangeAnswerError as error:
             # RULE: a reader that answers wrongly is not blamed on its power or wifi
             return {"success": False, "say": (LOGIN if error.login else UNKNOWN).format(where=self._where)}
-        except ReaderError:
+        except ReaderError as error:
+            # RULE: a reader whose name is not found is said as a name, not its power
+            unreachable = NOT_FOUND if isinstance(error, NameNotFoundError) else UNREACHABLE
             # RULE: a reader that does not answer is said, and nothing is guessed
-            return {"success": False, "say": UNREACHABLE.format(where=self._where)}
+            return {"success": False, "say": unreachable.format(where=self._where)}
         except (PageError, KeyError, TypeError, ValueError):
             return {"success": False, "say": UNKNOWN.format(where=self._where)}
         if not answer.get("success", True):
