@@ -19,6 +19,7 @@ import sys
 import time
 
 import pytest
+from bounded import WITHIN, run_bounded
 
 ROOT = pathlib.Path(__file__).parent.parent
 
@@ -171,13 +172,13 @@ def test_a_stopped_uv_run_step_hears_ctrl_c_once(tmp_path):
     ratchet = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
         ready = tmp_path / "ready"
-        deadline = time.monotonic() + 60
+        deadline = time.monotonic() + WITHIN
         while not ready.exists():
             assert ratchet.poll() is None, ratchet.communicate()[0]
             assert time.monotonic() < deadline, "the step never started"
             time.sleep(0.05)
         ratchet.send_signal(signal.SIGTERM)  # to the ratchet alone, as when its job is cancelled
-        out, _ = ratchet.communicate(timeout=60)
+        out, _ = ratchet.communicate(timeout=WITHIN)
         assert (tmp_path / "heard").read_text() == "1", out
     finally:
         if ratchet.poll() is None:
@@ -197,7 +198,7 @@ def test_main_is_copied_by_its_id_whatever_protocol_git_is_set_to(tmp_path, monk
 
     def git(*args):
         return subprocess.run(
-            ["git", *args], cwd=repo, check=True, capture_output=True, text=True, timeout=60
+            ["git", *args], cwd=repo, check=True, capture_output=True, text=True, timeout=WITHIN
         ).stdout
 
     git("init", "-q", "-b", "main")
@@ -266,7 +267,7 @@ def test_without_uv_the_ctrl_c_test_is_skipped_locally_and_fails_in_ci(tmp_path,
     (bare / "python").symlink_to(sys.executable)
     env = {**os.environ, "PATH": str(bare), "CI": ci}
     node = f"{pathlib.Path(__file__).name}::test_a_stopped_uv_run_step_hears_ctrl_c_once"
-    said = subprocess.run(
+    said = run_bounded(
         [
             sys.executable,
             "-m",
@@ -281,7 +282,5 @@ def test_without_uv_the_ctrl_c_test_is_skipped_locally_and_fails_in_ci(tmp_path,
         env=env,
         capture_output=True,
         text=True,
-        check=False,
-        timeout=120,
     )
     assert outcome in said.stdout, said.stdout

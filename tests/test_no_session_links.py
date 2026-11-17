@@ -6,6 +6,7 @@ import subprocess
 import sys
 
 import pytest
+from bounded import WITHIN
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "scripts"))
 
@@ -37,7 +38,7 @@ def test_attribution_and_ordinary_mentions_pass(message):
 
 def git(folder, *args):
     return subprocess.run(
-        ["git", "-C", str(folder), *args], check=True, capture_output=True, text=True, timeout=60
+        ["git", "-C", str(folder), *args], check=True, capture_output=True, text=True, timeout=WITHIN
     ).stdout
 
 
