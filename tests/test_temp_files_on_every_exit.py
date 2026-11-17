@@ -99,7 +99,7 @@ def test_a_suite_run_s_own_temporary_files_stay_in_its_folder(tmp_path, monkeypa
     """A file a test forgets is made in the run's folder, and goes with it."""
     project = _project(tmp_path, LEAKY_TEST)
     mutate = _load(project / "scripts/mutate.py", "mutate_leaky", tmp_path / "tmp", monkeypatch)
-    mutate.run_suite()
+    mutate.run_suite(timeout=WITHIN)
     assert [p.name for p in (tmp_path / "tmp").rglob("*")] == [mutate.MUTATE_TMP.name]
 
 
