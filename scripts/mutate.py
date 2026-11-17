@@ -354,8 +354,12 @@ def own_code(env: dict[str, str]) -> None:
         raise SystemExit(msg)
 
 
-def run_suite() -> tuple[int, list[str]]:
-    """Run the tests and give back how many failed, and which ones."""
+def run_suite(timeout: float | None = None) -> tuple[int, list[str]]:
+    """Run the tests and give back how many failed, and which ones.
+
+    `timeout` is for a test's own scratch run alone, so a hang fails that test.
+    A real run passes none and takes as long as it takes.
+    """
     # Two mutations that replace equal-length text leave files of identical
     # size, and CPython validates a cached .pyc from the source's modification
     # time and size -- both at one-second resolution. Inside the same second
@@ -386,6 +390,8 @@ def run_suite() -> tuple[int, list[str]]:
             cwd=ROOT,
             check=False,
             env=env,
+            # RULE: a real mutation run has no time limit
+            timeout=timeout,
         )
     finally:
         # RULE: a suite run leaves no temporary files behind

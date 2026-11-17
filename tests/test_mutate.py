@@ -10,6 +10,8 @@ import importlib.util
 import json
 import pathlib
 
+from bounded import WITHIN
+
 ROOT = pathlib.Path(__file__).parent.parent
 
 
@@ -112,7 +114,7 @@ def test_two_mutations_never_share_a_bytecode_cache(tmp_path, monkeypatch):
     # Its own folder, not the real MUTATE_TMP: while a mutation switches off the clean-up,
     # a run there would be left in the folder the outer mutation run is using.
     monkeypatch.setattr(mutate, "MUTATE_TMP", tmp_path / "mutate-tmp")
-    mutate.run_suite()
+    mutate.run_suite(timeout=WITHIN)
     assert not list(project.rglob("__pycache__")), (
         "the suite wrote bytecode, so two equal-sized mutations can collide"
     )
@@ -191,3 +193,22 @@ def test_a_mutation_run_names_each_rule_before_it_tests_it(tmp_path, monkeypatch
     mutate.main()
     assert "testing  a guard holds" in seen[0]
     assert "KILLED   a guard holds: 1" in pipe.shown
+
+
+def test_a_real_mutation_run_has_no_time_limit(monkeypatch, tmp_path):
+    """Roy's rule: a run takes as long as it takes. Only a test bounds its own scratch run."""
+    mutate = loaded()
+    asked = []
+
+    class Result:
+        stdout = stderr = ""
+
+    def run(*_args, **kwargs):
+        asked.append(kwargs.get("timeout"))
+        return Result()
+
+    monkeypatch.setattr(mutate.subprocess, "run", run)
+    monkeypatch.setattr(mutate, "MUTATE_TMP", tmp_path / "mutate-tmp")  # never the real one
+    mutate.run_suite()
+    mutate.run_suite(timeout=WITHIN)
+    assert asked == [None, WITHIN]
