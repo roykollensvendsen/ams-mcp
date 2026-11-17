@@ -9,6 +9,7 @@ its switched-off state.
 import importlib.util
 import json
 import pathlib
+import types
 
 from bounded import WITHIN
 
@@ -212,3 +213,32 @@ def test_a_real_mutation_run_has_no_time_limit(monkeypatch, tmp_path):
     mutate.run_suite()
     mutate.run_suite(timeout=WITHIN)
     assert asked == [None, WITHIN]
+
+
+def test_a_rule_s_result_line_says_how_long_its_tests_took(tmp_path, monkeypatch):
+    """A rule whose tests suddenly take far longer stands out in the log, before it hangs."""
+    mutate = loaded()
+    (tmp_path / "src" / "pkg").mkdir(parents=True)
+    (tmp_path / "src" / "pkg" / "core.py").write_text("# RULE: a guard holds\non = True\n")
+    rows = tmp_path / "mutations" / "src" / "pkg" / "core.py"
+    rows.mkdir(parents=True)
+    (rows / "a-guard-holds.toml").write_text(
+        '[[rule]]\nname = "a guard holds"\nfile = "src/pkg/core.py"\n'
+        "find = '^on = True$'\nreplace = 'on = False'\n"
+    )
+    isolated(mutate, tmp_path, monkeypatch, tmp_path / "mutations")
+    monkeypatch.setattr(mutate, "own_code", lambda _env: None)  # a scratch tree has no package
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    clock = [1000.0]
+    # Its own clock, not the time module: patching that would move every clock in this process.
+    monkeypatch.setattr(mutate, "time", types.SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def suite():
+        clock[0] += 42
+        return 1, ["test_a_guard_holds"]
+
+    monkeypatch.setattr(mutate, "run_suite", suite)
+    pipe = _Pipe()
+    monkeypatch.setattr("sys.stdout", pipe)
+    mutate.main()
+    assert "KILLED   a guard holds: 1 (42 s)" in pipe.shown
