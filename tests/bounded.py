@@ -7,10 +7,8 @@ on a test: only on a wait.
 """
 
 import os
-import queue
 import signal
 import subprocess
-import threading
 
 import pytest
 
@@ -39,18 +37,3 @@ def run_bounded(command, within=WITHIN, **kwargs):
     if check:
         done.check_returncode()
     return done
-
-
-def line_within(stream, seconds=WITHIN):
-    """The next line from `stream`; a failure, not a hang, if none comes within `seconds`.
-
-    The read runs on a thread of its own, since a pipe's readline cannot be given a limit.
-    Not select(): it sees the pipe, not a text buffer that may already hold the line.
-    A thread left reading is ended with the child, when the test's clean-up kills it.
-    """
-    got = queue.Queue()
-    threading.Thread(target=lambda: got.put(stream.readline()), daemon=True).start()
-    try:
-        return got.get(timeout=seconds)
-    except queue.Empty:
-        pytest.fail(f"no line within {seconds} s")
