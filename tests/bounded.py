@@ -6,6 +6,7 @@ as caught, the way one that crashes does. This is no limit on a mutation run or
 on a test: only on a wait.
 """
 
+import contextlib
 import os
 import signal
 import subprocess
@@ -30,7 +31,8 @@ def run_bounded(command, within=WITHIN, **kwargs):
         try:
             out, err = child.communicate(timeout=within)
         except subprocess.TimeoutExpired:
-            os.killpg(child.pid, signal.SIGKILL)
+            with contextlib.suppress(ProcessLookupError):  # the group may end just as time runs out
+                os.killpg(child.pid, signal.SIGKILL)
             out, err = child.communicate()
             pytest.fail(f"{command!r} did not end within {within} s; it said:\n{out or ''}{err or ''}")
     done = subprocess.CompletedProcess(child.args, child.returncode, out, err)
