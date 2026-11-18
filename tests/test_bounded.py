@@ -39,9 +39,11 @@ def test_a_child_that_runs_too_long_leaves_nothing_of_its_group_running(tmp_path
     """
     told = tmp_path / "pids"
     command = f'sleep 600 > /dev/null 2>&1 & echo $$ $! > "{told}"; echo started; wait'
+    started = time.monotonic()
     try:
         with pytest.raises(pytest.fail.Exception, match="did not end within 1 s") as failed:
             run_bounded(command, 1, shell=True, capture_output=True, text=True)  # noqa: S604 - its own fixed line
+        assert time.monotonic() - started < 15, "the limit waited for the child to end by itself"
         assert "started" in str(failed.value)
         _, grandchild = (int(pid) for pid in told.read_text().split())
         deadline = time.monotonic() + 10
