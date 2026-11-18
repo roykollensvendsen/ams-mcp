@@ -8,6 +8,7 @@ send nothing but GET, to the seven pages listed, and follows no redirect.
 
 import asyncio
 import json
+import socket
 import time
 
 import httpx
@@ -109,10 +110,34 @@ def test_a_reader_that_does_not_answer_is_an_error():
         asyncio.run(_reader(handler).page("data.json"))
 
 
+def _lookup_fails(errno):
+    def handler(request):
+        cause = socket.gaierror(errno, "lookup failed")
+        raise httpx.ConnectError(str(cause), request=request) from cause
+
+    return handler
+
+
 def test_a_name_the_network_does_not_know_is_told_apart_from_a_reader_that_does_not_answer():
-    """A made-up name in a domain set aside never to exist, so no reader is ever asked."""
     with pytest.raises(reader.NameNotFoundError):
-        asyncio.run(HttpReader("reader.invalid").page("data.json"))
+        asyncio.run(_reader(_lookup_fails(socket.EAI_NONAME)).page("data.json"))
+
+
+def test_a_lookup_that_could_not_be_made_at_all_is_not_called_an_unknown_name():
+    """EAI_AGAIN is what this computer gets when it is offline itself; the name may be fine."""
+    with pytest.raises(reader.ReaderError) as raised:
+        asyncio.run(_reader(_lookup_fails(socket.EAI_AGAIN)).page("data.json"))
+    assert not isinstance(raised.value, reader.NameNotFoundError)
+
+
+def test_a_real_lookup_of_a_name_that_cannot_exist_is_called_an_unknown_name():
+    """A domain set aside never to exist, so no reader is ever asked.
+
+    This is the proof that httpx still keeps the lookup's own error in its chain. It
+    needs a resolver, and gives up after a few seconds where one forwards the name on.
+    """
+    with pytest.raises(reader.NameNotFoundError):
+        asyncio.run(asyncio.wait_for(HttpReader("reader.invalid").page("data.json"), 5))
 
 
 def test_a_reader_that_does_not_answer_is_not_called_an_unknown_name():

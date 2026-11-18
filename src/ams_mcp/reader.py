@@ -181,11 +181,17 @@ class HttpReader:
             return await client.get(f"{self._base}/{name}")
 
 
+# The lookup's own answer that the name does not exist. A lookup that could not be made,
+# such as EAI_AGAIN when this computer is offline, says nothing about the name.
+_NOT_KNOWN = frozenset({socket.EAI_NONAME, getattr(socket, "EAI_NODATA", socket.EAI_NONAME)})
+
+
 def _name_not_found(error: BaseException) -> bool:
     """Whether a failed request failed at looking up the reader's name, however deep that lies."""
     seen: BaseException | None = error
     while seen is not None:
         if isinstance(seen, socket.gaierror):
-            return True
+            # RULE: a lookup that could not be made at all is not called an unknown name
+            return seen.errno in _NOT_KNOWN
         seen = seen.__cause__ or seen.__context__
     return False

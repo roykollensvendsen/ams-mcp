@@ -1,0 +1,5 @@
+[[rule]]
+name = "a lookup that could not be made at all is not called an unknown name"
+file = "src/ams_mcp/reader.py"
+find = '^\s*return seen\.errno in _NOT_KNOWN$'
+replace = 'return True'
