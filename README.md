@@ -47,51 +47,49 @@ $ ams-mcp ask now --simulate meter-quiet
 Simulated: Not confirmed: the reader has not heard from the meter for over 30 seconds. Drawing 1.05 kW from the grid now. The phases carry 2.9, 0.9 and 1.5 A. This meter sends no power factor.
 ```
 
-## Point it at the reader
+## Set it up
 
-The address goes in a file of your own, never in this repository:
+It needs an [AmsToMqttBridge](https://github.com/UtilitechAS/amsreader-firmware)
+reader on the home network, and [uv](https://docs.astral.sh/uv/). The setup guide,
+[docs/setup.md](docs/setup.md), is written so an agent can follow it alone. Every
+step there has a check. Some steps only the owner can do, and they are listed in
+full here.
 
-<!-- not run: it writes into the reader's own settings folder -->
-```toml
-# ~/.config/ams-mcp/config.toml
-[reader]
-address = "192.0.2.10"     # the reader's address on your network
-timezone = "Europe/Oslo"   # optional; the computer's own by default
+<!-- steps:begin -->
+<!-- Made by scripts/docs.py from docs/setup.md. Change the guide, then run it. -->
+
+The steps, in full, are in [docs/setup.md](docs/setup.md):
+
+1. Install the project
+2. Hear the plugin read a recorded reader
+3. Write the reader's address into the plugin's settings file
+4. Add the plugin to claude-voice
+
+### Steps only the owner can do
+
+#### A. Find the reader's name or address in the router
+
+Why: the router's list of devices is behind the owner's own login, and the address
+belongs to the owner's home network.
+
+Look in the router's list of devices for the meter reader. Its name there, such as
+`amsreader.invalid`, is the better choice. Use its IP address if the router shows no
+name.
+
+Check: `curl -s http://<the name or address>/data.json` prints a short JSON page.
+
+#### B. Approve the plugin in claude-voice
+
+Why: claude-voice offers a new plugin's tools only after the owner types its approval.
+
+<!-- not run: it asks for typed input -->
+```bash
+claude-voice plugins approve ams
 ```
 
-The address can also be the name your router gives the reader, such as
-`amsreader.invalid`. A name keeps working when the router hands the reader a
-new number, and many routers cannot set one aside. If the router ever stops
-knowing the name, a question says so, and that you can write the number in
-its place.
+Check: `claude-voice plugins list` shows `ams` as `approved`.
 
-Without it, a question says where the file should be:
-
-```console
-$ ams-mcp ask now --settings-file /nowhere/config.toml
-ams-mcp: There is no settings file at /nowhere/config.toml. Write [reader] address = "..." there, or use --simulate.
-```
-
-`ams-mcp serve` still starts without it, so the voice sees the plugin, and
-every tool answers with the same advice and "Then restart the plugin." It
-says so once on its error output, and serves until its input closes:
-
-```console
-$ ams-mcp serve --settings-file /nowhere/config.toml < /dev/null
-ams-mcp: There is no settings file at /nowhere/config.toml. Write [reader] address = "..." there, or use --simulate.
-```
-
-`ams-mcp serve` then serves the tools over stdio. For claude-voice:
-
-<!-- not run: it is a block for claude-voice's own settings file -->
-```toml
-[plugins.ams]
-command = "uv"
-args = ["run", "ams-mcp", "serve"]
-cwd = "~/ams-mcp"
-tools = ["ams_now", "ams_energy", "ams_price", "ams_capacity", "ams_history"]
-timeout = 30
-```
+<!-- steps:end -->
 
 What each of the reader's short keys means, read from the firmware's source,
 is in [docs/pages.md](docs/pages.md).
