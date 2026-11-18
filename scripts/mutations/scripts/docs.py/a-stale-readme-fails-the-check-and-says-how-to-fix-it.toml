@@ -1,0 +1,5 @@
+[[rule]]
+name = "a stale readme fails the check and says how to fix it"
+file = "scripts/docs.py"
+find = 'if args\.check and fresh != readme:'
+replace = 'if False:'

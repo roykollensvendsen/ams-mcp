@@ -8,11 +8,12 @@ lines and has no dependency, so it is written here rather than reached for.
 A block fenced as ``console`` is run. Lines beginning ``$ `` are commands, and
 everything until the next command is what the document says they print.
 
-There is no silent way out. A block that looks like commands and is not
-fenced ``console`` must carry ``<!-- not run: <reason> -->`` on the line
-above, or the suite fails; choosing a different fence is otherwise an opt-out
-nobody sees. Every verb the command has must appear in at least one block that
-is run, so a verb cannot be added without a worked example.
+There is no silent way out. A block that looks like commands and is not fenced
+``console`` must carry ``<!-- not run: <reason> -->`` on the line above, or
+``<!-- safe-to-run -->`` for a setup step that test_docs runs, or the suite
+fails; choosing a different fence is otherwise an opt-out nobody sees. Every
+verb the command has must appear in at least one block that is run, so a verb
+cannot be added without a worked example.
 """
 
 import pathlib
@@ -33,6 +34,8 @@ LOOKS_LIKE_A_COMMAND = re.compile(
     r"^\s*\$?\s*(ams-mcp|uv |git |pytest|python|committed|ruff|mypy)\b", re.MULTILINE
 )
 NOT_RUN = re.compile(r"<!--\s*not run:\s*(.+?)\s*-->\s*$")
+# A setup step marked safe to run is run by test_docs, in a home of its own.
+SAFE_TO_RUN = "<!-- safe-to-run -->"
 
 
 def pages() -> list[pathlib.Path]:
@@ -102,7 +105,7 @@ def test_no_block_of_commands_escapes_by_choosing_another_fence():
                 continue
             before = text[: match.start()].splitlines()
             preceding = next((x for x in reversed(before) if x.strip()), "")
-            if not NOT_RUN.search(preceding):
+            if not NOT_RUN.search(preceding) and preceding.strip() != SAFE_TO_RUN:
                 first = next((x for x in body.splitlines() if x.strip()), "")
                 escaped.append(f"{page.relative_to(ROOT)}: {first.strip()[:50]}")
     assert not escaped, "fence these console and let them run, or say why they cannot:\n" + "\n".join(escaped)
