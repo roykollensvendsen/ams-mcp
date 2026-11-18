@@ -65,3 +65,16 @@ def _end_if_still_the_sleep(told):
 def test_a_child_that_ends_in_time_gives_back_what_it_said():
     said = run_bounded([sys.executable, "-c", "print('done')"], WITHIN, capture_output=True, text=True)
     assert (said.returncode, said.stdout) == (0, "done\n")
+
+
+def test_a_group_gone_as_the_limit_runs_out_still_fails_cleanly(monkeypatch):
+    """The group can end between the limit running out and the kill; that is still the test's failure."""
+    real_killpg = os.killpg
+
+    def gone_first(pid, sig):
+        real_killpg(pid, sig)
+        raise ProcessLookupError
+
+    monkeypatch.setattr("bounded.os.killpg", gone_first)
+    with pytest.raises(pytest.fail.Exception, match="did not end within"):
+        run_bounded(["sleep", "30"], within=0.2)
