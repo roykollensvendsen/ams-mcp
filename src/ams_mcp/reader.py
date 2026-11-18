@@ -130,16 +130,20 @@ class HttpReader:
         self._cache[name] = (self._clock(), page)
         return page
 
+    def _not_read(self, error: httpx.HTTPError) -> ReaderError:
+        """Why the reader was not read: its name was not found, or it did not answer."""
+        # RULE: a name the network does not know is told apart from a reader that does not answer
+        if _name_not_found(error):
+            msg = f"the reader's name was not found: {self._base.removeprefix('http://')}"
+            return NameNotFoundError(msg)
+        msg = f"the reader did not answer: {type(error).__name__}"
+        return ReaderError(msg)
+
     async def _get(self, name: str) -> dict[str, Any]:
         try:
             response = await self._read(name)
         except httpx.HTTPError as error:
-            # RULE: a name the network does not know is told apart from a reader that does not answer
-            if _name_not_found(error):
-                msg = f"the reader's name was not found: {self._base.removeprefix('http://')}"
-                raise NameNotFoundError(msg) from error
-            msg = f"the reader did not answer: {type(error).__name__}"
-            raise ReaderError(msg) from error
+            raise self._not_read(error) from error
         if response.status_code != httpx.codes.OK:
             msg = f"the reader answered {response.status_code} for {name}"
             login = response.status_code in {httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN}

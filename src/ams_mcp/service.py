@@ -112,10 +112,8 @@ class AmsService:
             # RULE: a reader that answers wrongly is not blamed on its power or wifi
             return {"success": False, "say": (LOGIN if error.login else UNKNOWN).format(where=self._where)}
         except ReaderError as error:
-            # RULE: a reader whose name is not found is said as a name, not its power
-            unreachable = NOT_FOUND if isinstance(error, NameNotFoundError) else UNREACHABLE
             # RULE: a reader that does not answer is said, and nothing is guessed
-            return {"success": False, "say": unreachable.format(where=self._where)}
+            return {"success": False, "say": _unreachable(error).format(where=self._where)}
         except (PageError, KeyError, TypeError, ValueError):
             return {"success": False, "say": UNKNOWN.format(where=self._where)}
         if not answer.get("success", True):
@@ -383,6 +381,12 @@ def _needed(tariff: pages.Tariff, top: int, today: int) -> float:
     others = sorted((p.kwh for p in tariff.peaks if p.day != today), reverse=True)
     counted = min(top, len(others) + 1)
     return counted * tariff.step_kw - sum(others[: counted - 1])
+
+
+def _unreachable(error: ReaderError) -> str:
+    """What to say when the reader was not read: that its name is not known, or that it did not answer."""
+    # RULE: a reader whose name is not found is said as a name, not its power
+    return NOT_FOUND if isinstance(error, NameNotFoundError) else UNREACHABLE
 
 
 def _age(seconds: float) -> str:

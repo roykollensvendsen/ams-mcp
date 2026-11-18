@@ -1,5 +1,5 @@
 [[rule]]
 name = "a reader whose name is not found is said as a name, not its power"
 file = "src/ams_mcp/service.py"
-find = '^\s*unreachable = NOT_FOUND if isinstance\(error, NameNotFoundError\) else UNREACHABLE$'
-replace = 'unreachable = UNREACHABLE'
+find = '^\s*return NOT_FOUND if isinstance\(error, NameNotFoundError\) else UNREACHABLE$'
+replace = 'return UNREACHABLE'
