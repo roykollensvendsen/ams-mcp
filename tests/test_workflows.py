@@ -1,18 +1,20 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The continuous-integration workflows, checked as the text GitHub reads.
 
-Copied from claude-voice's tests/test_workflows.py (claude-voice #362).
+Copied from claude-voice's tests/test_workflows.py (claude-voice #362), with the
+group keyed by run for everything but a pull request (no-duplicates-v1 notes, n1).
 """
 
 import pathlib
 
 ROOT = pathlib.Path(__file__).parent.parent
 
-#: One run per workflow and ref. A newer push to a pull request cancels the run it superseded,
-#: so old runs do not hold the runners; a run on main always finishes.
+#: A newer push to a pull request stops that pull request's stale run. Every other run,
+#: on main, a tag or by hand, is its own group and always runs to the end. With one group
+#: per ref, GitHub keeps only one waiting run, so a commit on main between two others got none.
 SUPERSEDED = """\
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 """
 
