@@ -274,4 +274,7 @@ def test_a_row_that_breaks_the_code_is_reported_as_broken(tmp_path, monkeypatch,
     assert suites == []
     assert source.read_text() == "# RULE: a guard holds\non = True\n"
     assert "a guard holds" in page.read_text().split("Broken rows")[1]
+    assert "None survived" not in page.read_text(), (
+        "a run that tested nothing for a rule claims none survived"
+    )
     assert "a guard holds" in summary.read_text()
