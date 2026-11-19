@@ -16,7 +16,7 @@ without a login, and never a page that saves a setting, reboots or upgrades
 |---|---|
 | `ams_now` | the power drawn or sent now, each phase's volts and amps, and the power factor |
 | `ams_energy` | kWh in and out, and what it cost, this hour, today and this month |
-| `ams_price` | the price now, the next hours, and the cheapest hours left today |
+| `ams_price` | the price now, the next hours, and the cheapest hours left today; with `hours` (1 to 6), the cheapest run of that many hours in a row that starts today |
 | `ams_capacity` | the capacity step, the month's top three hours, and how far this hour is from the next step |
 | `ams_history` | today by hour, or this month by day, in short |
 
