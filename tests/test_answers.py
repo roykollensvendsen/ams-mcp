@@ -377,10 +377,48 @@ def test_history_of_the_month_says_the_month_so_far_its_extremes_and_last_month(
     a = _ask("history", period="month")
     assert a["say"] == (
         "This month so far 605 kWh, 548 kr. Busiest day the 9th with 70.9 kWh, "
-        "quietest the 2nd with 47.8 kWh. Last month 1562 kWh, 1255 kr."
+        "quietest the 2nd with 47.8 kWh. Last month 1562 kWh, 1255 kr. "
+        "On course for about 1717 kWh this month, 155 kWh more than last month, "
+        "going by the whole days so far."
     )
     assert [d["day"] for d in a["days"]] == list(range(1, 11))
     assert a["last_month"]["import_kwh"] == 1561.95
+
+
+def test_the_month_s_course_is_guessed_from_its_whole_days_so_far():
+    # Days 1 to 10 of November used 572.18 kWh, 57.218 a day; 30 such days are 1716.54 kWh,
+    # 154.59 more than last month's 1561.95. Today, the 11th, is not whole and is left out.
+    a = _ask("history", period="month")
+    assert a["course"] == {"whole_days": 10, "month_kwh": 1716.5, "more_than_last_month_kwh": 154.6}
+
+
+def test_a_month_on_course_for_less_than_last_month_says_less():
+    a = _ask("history", Pages({"sysinfo.json": lambda b: b["last_month"].update(u=2000.0)}), period="month")
+    assert a["course"]["more_than_last_month_kwh"] == -283.5
+    assert "On course for about 1717 kWh this month, 283 kWh less than last month" in a["say"]
+
+
+SECOND = dt.datetime(2026, 11, 2, 14, 10, 46, tzinfo=OSLO).timestamp()
+THIRD = dt.datetime(2026, 11, 3, 14, 10, 46, tzinfo=OSLO).timestamp()
+
+
+def test_a_month_s_course_is_not_guessed_before_the_third_day():
+    a = _ask("history", Pages(read_at=SECOND), now=SECOND + 1, period="month")
+    assert a["course"] is None
+    assert a["say"].endswith("Too early in the month to say where it will end.")
+    # From the 3rd there are two whole days: 54.54 and 47.78, 1534.8 kWh over 30 days.
+    b = _ask("history", Pages(read_at=THIRD), now=THIRD + 1, period="month")
+    assert b["course"]["whole_days"] == 2
+    assert b["course"]["month_kwh"] == 1534.8
+
+
+def test_a_month_s_course_without_last_month_s_total_says_there_is_nothing_to_compare():
+    a = _ask("history", Pages({"sysinfo.json": lambda b: b.pop("last_month")}), period="month")
+    assert a["course"] == {"whole_days": 10, "month_kwh": 1716.5, "more_than_last_month_kwh": None}
+    assert a["say"].endswith(
+        "On course for about 1717 kWh this month, going by the whole days so far. "
+        "Last month's total isn't known, so there is nothing to compare it with."
+    )
 
 
 def test_history_refuses_a_period_it_does_not_know():

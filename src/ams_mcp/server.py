@@ -122,7 +122,8 @@ def build_server(service: AmsService, *, simulated: bool = False) -> MCPServer[A
     @guarded.tool(
         description=(
             "Sums up a day or month.\nPeriod 'day' (the default): today so far and its busiest hour. "
-            "'month': this month so far, its busiest day, and last month."
+            "'month': this month so far, its busiest day, last month, and where this month is "
+            "headed against last month."
         )
     )
     async def ams_history(period: Literal["day", "month"] = "day") -> dict[str, Any]:
