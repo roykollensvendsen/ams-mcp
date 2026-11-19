@@ -1,5 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Guards that hold for the whole test session."""
+"""Guards that hold for the whole test session.
+
+How each tool's run folders are kept from each other's sweeps, by the designs of
+the plugin standard's cleanup checklist (new-plugin-v8, points 1 and 3):
+
+- ``scripts/ratchet.py`` uses A2, the renamed lock file, as the bridge's
+  ``held_folder.py`` does. A folder with no lock is swept only after a grace period.
+- ``scripts/mutate.py`` uses B, the parent guard. Its parent folder belongs to one
+  checkout, so the guard is the checkout's own lock, held from the sweep to the final
+  removal of the parent folder.
+"""
 
 import contextlib
 import pathlib

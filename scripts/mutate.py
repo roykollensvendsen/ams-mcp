@@ -446,11 +446,12 @@ def main() -> int:
                 return 0
             return _mutate_all(args)
         finally:
-            os.close(held)
             # Each run's folder is gone by now; the one that held them goes too, if empty.
+            # Still under the lock: the next run may start the moment it is let go.
             # RULE: a finished run leaves no empty folder behind
             with contextlib.suppress(OSError):
                 MUTATE_TMP.rmdir()
+            os.close(held)
 
 
 def _mutate_all(args: argparse.Namespace) -> int:

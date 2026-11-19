@@ -112,6 +112,36 @@ def test_a_finished_run_leaves_no_empty_folder_behind(tmp_path, monkeypatch):
     assert list((tmp_path / "tmp").iterdir()) == []
 
 
+def test_the_runs_folder_is_removed_before_the_checkout_is_let_go(tmp_path, monkeypatch):
+    """The next run may start the moment the lock is let go, and make its folder in there.
+
+    Removed after that, the folder could vanish under the new run as it starts.
+    The check is made at the moment the lock's handle is closed.
+    """
+    project = _project(tmp_path, LEAKY_TEST.replace("tempfile.mkstemp()", "pass"))
+    mutate = _load(project / "scripts/mutate.py", "mutate_let_go", tmp_path / "tmp", monkeypatch)
+    monkeypatch.setenv("PYTHONPATH", _its_own(project)["PYTHONPATH"])
+    monkeypatch.setattr("sys.argv", ["mutate.py"])
+    held, there_when_let_go = [], []
+    take = mutate._the_only_run  # noqa: SLF001
+
+    def taken():
+        held.append(take())
+        return held[0]
+
+    real_close = os.close
+
+    def close(fd):
+        if held and fd == held[0]:
+            there_when_let_go.append(mutate.MUTATE_TMP.exists())
+        real_close(fd)
+
+    monkeypatch.setattr(mutate, "_the_only_run", taken)
+    monkeypatch.setattr(mutate.os, "close", close)
+    assert mutate.main() == 0
+    assert there_when_let_go == [False], "the checkout was let go with the runs' folder still there"
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows has no SIGTERM to send")
 def test_a_stopped_run_cleans_up_as_an_interrupted_one_does(tmp_path):
     """SIGTERM mid-run: the source is put back, and nothing is left in the temporary folder."""
