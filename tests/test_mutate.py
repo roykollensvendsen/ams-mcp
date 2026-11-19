@@ -242,3 +242,36 @@ def test_a_rule_s_result_line_says_how_long_its_tests_took(tmp_path, monkeypatch
     monkeypatch.setattr("sys.stdout", pipe)
     mutate.main()
     assert "KILLED   a guard holds: 1 (42 s)" in pipe.shown
+
+
+def test_a_row_that_breaks_the_code_is_reported_as_broken(tmp_path, monkeypatch, capsys):
+    """A replacement that does not compile fails every test, which would pass for a kill.
+
+    As easee-mcp #33 does it: the rule is named BROKEN, no suite runs for it, the
+    source is left as it was, and the run fails. The page and the step summary say so.
+    """
+    mutate = loaded()
+    (tmp_path / "src" / "pkg").mkdir(parents=True)
+    source = tmp_path / "src" / "pkg" / "core.py"
+    source.write_text("# RULE: a guard holds\non = True\n")
+    rows = tmp_path / "mutations" / "src" / "pkg" / "core.py"
+    rows.mkdir(parents=True)
+    (rows / "a-guard-holds.toml").write_text(
+        '[[rule]]\nname = "a guard holds"\nfile = "src/pkg/core.py"\n'
+        "find = '^on = True$'\nreplace = 'on = ('\n"
+    )
+    isolated(mutate, tmp_path, monkeypatch, tmp_path / "mutations")
+    monkeypatch.setattr(mutate, "own_code", lambda _env: None)  # a scratch tree has no package
+    summary, page = tmp_path / "summary.md", tmp_path / "page.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setattr("sys.argv", ["mutate.py", "--write", str(page)])
+    suites = []
+    monkeypatch.setattr(mutate, "run_suite", lambda: suites.append(1) or (1, ["test_a_guard_holds"]))
+    assert mutate.main() == 1
+    out = capsys.readouterr().out
+    assert "BROKEN   a guard holds: the replacement is not valid code" in out
+    assert "KILLED" not in out
+    assert suites == []
+    assert source.read_text() == "# RULE: a guard holds\non = True\n"
+    assert "a guard holds" in page.read_text().split("Broken rows")[1]
+    assert "a guard holds" in summary.read_text()
