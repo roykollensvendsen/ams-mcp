@@ -10,6 +10,7 @@ confirmed" first. When the reader does not answer, nothing is guessed.
 from __future__ import annotations
 
 import asyncio
+import calendar
 import datetime as dt
 import re
 import time
@@ -35,6 +36,8 @@ SPOKEN_HOURS = 3
 RUN_HOURS = range(1, 7)
 #: A time to end a run by: two-digit hour and minute, as "07:00".
 UNTIL = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+#: The first day of a month its course is guessed on: before it, one whole day at most.
+COURSE_FROM_DAY = 3
 
 #: Every failure says what is wrong and what to do next; {where} is the reader's address.
 UNREACHABLE = (
@@ -411,7 +414,8 @@ class AmsService:
         )
         live, by_day = pages.live(data.body), pages.days(plot.body)
         kr = say.currency(live.currency)
-        today = self._local(plot.read_at).day
+        on = self._local(plot.read_at).date()
+        today = on.day
         # Days before today are this month's; from today on the plot still holds last month's.
         days = [(d, by_day.import_kwh[d], by_day.export_kwh[d]) for d in range(1, today)]
         words = [
@@ -427,15 +431,46 @@ class AmsService:
         last = pages.system(info.body).last_month if info else None
         if last:
             words.append(f"Last month {say.kwh(last.import_kwh)} kWh, {say.money(last.cost)} {kr}.")
+        course, said = _course([i for _, i, _ in days], on, last)
+        words.append(said)
         answer = {
             "say": " ".join(words),
             "period": "month",
             "month": _spent(live.month),
             "days": [{"day": d, "import_kwh": i, "export_kwh": e} for d, i, e in days],
             "last_month": _spent(last) if last else None,
+            "course": course,
             "currency": live.currency,
         }
         return answer, [data, plot]
+
+
+def _course(
+    whole_days: list[float], on: dt.date, last: pages.Spent | None
+) -> tuple[dict[str, Any] | None, str]:
+    """Where the month is headed, on a straight line from its whole days so far, and how to say it.
+
+    Today is left out: a part of a day would drag the line down early in the day.
+    It is a guess, and said as one.
+    """
+    # RULE: a month's course is not guessed before the third day
+    if on.day < COURSE_FROM_DAY or not whole_days:
+        return None, "Too early in the month to say where it will end."
+    month_kwh = sum(whole_days) / len(whole_days) * calendar.monthrange(on.year, on.month)[1]
+    more = None if last is None else month_kwh - last.import_kwh
+    course = {
+        "whole_days": len(whole_days),
+        "month_kwh": round(month_kwh, 1),
+        "more_than_last_month_kwh": None if more is None else round(more, 1),
+    }
+    head = f"On course for about {say.kwh(month_kwh)} kWh this month"
+    if more is None:
+        return course, (
+            f"{head}, going by the whole days so far. "
+            "Last month's total isn't known, so there is nothing to compare it with."
+        )
+    than = f"{say.kwh(abs(more))} kWh {'more' if more >= 0 else 'less'} than last month"
+    return course, f"{head}, {than}, going by the whole days so far."
 
 
 def _spent(spent: pages.Spent) -> dict[str, float]:

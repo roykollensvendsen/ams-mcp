@@ -18,7 +18,7 @@ without a login, and never a page that saves a setting, reboots or upgrades
 | `ams_energy` | kWh in and out, and what it cost, this hour, today and this month |
 | `ams_price` | the price now, the next hours, and the cheapest hours left today; with `hours` (1 to 6), the cheapest run of that many hours in a row that starts today; with `until` too ("07:00"), the cheapest run that ends by then, which may start after midnight |
 | `ams_capacity` | the capacity step, the month's top three hours, and how far this hour is from the next step |
-| `ams_history` | today by hour, or this month by day, in short |
+| `ams_history` | today by hour, or this month by day, in short; for the month, also a guess at where it ends against last month |
 
 Every answer has `say`, in kW, kWh and kr, `success`, and `read_at`, the time
 of the reading. A reading older than about 30 seconds, or one the reader has

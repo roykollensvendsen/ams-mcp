@@ -1,0 +1,5 @@
+[[rule]]
+name = "a month's course is not guessed before the third day"
+file = "src/ams_mcp/service.py"
+find = '^\s*if on\.day < COURSE_FROM_DAY or not whole_days:$'
+replace = 'if not whole_days:'
