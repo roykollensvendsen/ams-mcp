@@ -197,7 +197,7 @@ def test_a_mutation_run_names_each_rule_before_it_tests_it(tmp_path, monkeypatch
 
 
 def test_a_real_mutation_run_has_no_time_limit(monkeypatch, tmp_path):
-    """Roy's rule: a run takes as long as it takes. Only a test bounds its own scratch run."""
+    """The owner's rule: a run takes as long as it takes. Only a test bounds its own scratch run."""
     mutate = loaded()
     asked = []
 
