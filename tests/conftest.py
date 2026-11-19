@@ -6,9 +6,10 @@ the plugin standard's cleanup checklist (new-plugin-v8, points 1 and 3):
 
 - ``scripts/ratchet.py`` uses A2, the renamed lock file, as the bridge's
   ``held_folder.py`` does. A folder with no lock is swept only after a grace period.
-- ``scripts/mutate.py`` uses B, the parent guard. Its parent folder belongs to one
-  checkout, so the guard is the checkout's own lock, held from the sweep to the final
-  removal of the parent folder.
+- ``scripts/mutate.py`` uses B, with the checkout's own lock as the parent lock. Its
+  runs' folder is named from this checkout's path, so only this checkout's runs use
+  it, and each holds ``.mutate.lock`` from the sweep to the final removal. Anything
+  else that ever writes in that folder must take the same lock first.
 """
 
 import contextlib
