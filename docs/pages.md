@@ -56,7 +56,12 @@ today's own entry.
 
 `currency` and `source`, then `"00"` to `"35"`: the price for this hour and the
 35 after it, counted from the moment the page is read, with the reader's own
-additions applied. `null` where there is none.
+additions applied. `null` where there is none. Tomorrow's hours fill in once its
+prices are out, at about 13:00; until then they are `null`.
+
+The page counts in whole hours. A page with a slot past `"35"`, or a key giving
+a step of its own, would be in smaller steps, and is refused rather than read as
+hours.
 
 ## dayplot.json and monthplot.json: hour by hour, day by day
 

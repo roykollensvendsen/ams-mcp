@@ -145,6 +145,81 @@ def test_a_reader_with_no_prices_says_so():
     assert "no prices" in a["say"]
 
 
+# ams_price with hours: the cheapest run of hours in a row, started today.
+
+LATE = READ_AT + 9 * 3600  # 23:10:46 the same day: "00" is 23:00, "01" is midnight
+
+
+def _after(first_null):
+    """No price from slot `first_null` on, as before tomorrow's prices are out."""
+
+    def change(body):
+        for k in list(body):
+            if k.isdigit() and int(k) >= first_null:
+                body[k] = None
+
+    return change
+
+
+def test_a_run_of_hours_names_its_start_its_end_and_its_average():
+    # Slots 09 to 11 are 23:00 to 02:00: 0.8741, 0.8744 and 0.8687, 0.8724 on average.
+    a = _ask("price", hours=3)
+    assert a["run"] == {"hours": 3, "start": "23:00", "end": "02:00", "price": 0.8724}
+    assert a["say"] == "The cheapest 3 hours in a row start at 23:00 and end at 02:00, at 0.87 kr per kWh."
+
+
+def test_a_run_of_hours_uses_only_hours_that_all_have_a_price():
+    # Slot 10 has none, so neither 23:00 (09-11) nor 22:00 (08-10) can be the run.
+    # Next is 21:00 (07-09): 0.9258, 0.8852 and 0.8741, 0.8950 on average.
+    a = _ask("price", Pages({"energyprice.json": _set(**{"10": None})}), hours=3)
+    assert a["run"] == {"hours": 3, "start": "21:00", "end": "00:00", "price": 0.8950}
+    assert "out yet" not in a["say"]
+
+
+def test_a_run_of_hours_runs_past_midnight_once_tomorrow_s_prices_are_out():
+    # At 23:10 only 23:00 starts today; with tomorrow's prices in, it runs to 01:00.
+    a = _ask("price", Pages(read_at=LATE), now=LATE + 1, hours=2)
+    assert (a["run"]["start"], a["run"]["end"]) == ("23:00", "01:00")
+    assert "out yet" not in a["say"]
+
+
+def test_a_run_of_hours_ends_by_midnight_until_tomorrow_s_prices_are_out():
+    a = _ask("price", Pages({"energyprice.json": _after(1)}, read_at=LATE), now=LATE + 1, hours=1)
+    assert (a["run"]["start"], a["run"]["end"]) == ("23:00", "00:00")
+    assert a["say"].endswith("Tomorrow's prices aren't out yet, so this ends by midnight.")
+
+
+def test_a_run_too_long_for_the_prices_out_says_so():
+    a = _ask("price", Pages({"energyprice.json": _after(1)}, read_at=LATE), now=LATE + 1, hours=2)
+    assert a["success"] is True
+    assert a["run"] is None
+    assert a["say"] == "Tomorrow's prices aren't out yet, and no 2 hours in a row are known from now."
+
+
+def test_a_run_of_hours_on_the_night_the_clocks_go_back_is_counted_in_real_hours():
+    # From 00:30 on 25 October: 01 is 01:00, 02 is the first 02:00, 03 the second, 04 is 03:00.
+    def cheap(body):
+        body["01"], body["02"], body["03"] = 0.01, 0.01, 0.01
+
+    a = _ask("price", Pages({"energyprice.json": cheap}, read_at=AUTUMN), now=AUTUMN + 1, hours=3)
+    assert (a["run"]["start"], a["run"]["end"]) == ("01:00", "03:00")
+
+
+@pytest.mark.parametrize("hours", [0, 7, -1])
+def test_a_run_of_hours_is_one_to_six_hours(hours):
+    a = _ask("price", hours=hours)
+    assert a["success"] is False
+    assert a["say"] == f"I can find 1 to 6 hours in a row, not {hours}. Ask for 1 to 6 hours."
+
+
+@pytest.mark.parametrize("change", [_set(**{"36": 0.9}), _set(resolution=15)], ids=["slot 36", "a step"])
+def test_a_price_page_with_more_than_36_hours_or_a_step_of_its_own_is_refused(change):
+    # A page in 15-minute steps would otherwise be read as hours, and every time said wrong.
+    a = _ask("price", Pages({"energyprice.json": change}))
+    assert a["success"] is False
+    assert "v2.4.11" in a["say"]
+
+
 # ams_capacity
 
 

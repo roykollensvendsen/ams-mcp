@@ -1,0 +1,5 @@
+[[rule]]
+name = "a price page with more than 36 hours or a step of its own is refused"
+file = "src/ams_mcp/pages.py"
+find = '^\s*if not _by_the_hour\(page\):$'
+replace = 'if False:'
