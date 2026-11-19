@@ -220,6 +220,108 @@ def test_a_price_page_with_more_than_36_hours_or_a_step_of_its_own_is_refused(ch
     assert "v2.4.11" in a["say"]
 
 
+# ams_price with hours and until: the cheapest run that ends by a time, such as a charge by morning.
+
+
+def test_a_run_until_a_time_may_start_after_midnight():
+    # Read at 14:10, so 07:00 is tomorrow's: slots 00 to 16 end by then. The cheapest four
+    # in a row are 12 to 15, 02:00 to 06:00: 0.8633, 0.862, 0.8607 and 0.8605, 0.8616 on average.
+    a = _ask("price", hours=4, until="07:00")
+    assert a["run"] == {"hours": 4, "start": "02:00", "end": "06:00", "price": 0.8616}
+    assert a["say"] == "The cheapest 4 hours in a row start at 02:00 and end at 06:00, at 0.86 kr per kWh."
+
+
+def test_a_run_until_a_time_already_gone_today_ends_by_it_tomorrow():
+    # 14:00 has passed at 14:10, so the run ends by 14:00 tomorrow: the cheapest hour is 13:00.
+    a = _ask("price", hours=1, until="14:00")
+    assert a["run"] == {"hours": 1, "start": "13:00", "end": "14:00", "price": 0.8508}
+
+
+def test_a_run_asked_to_end_by_a_time_never_ends_after_it():
+    # The cheapest hour of all is 09:00 tomorrow (slot 19), but it ends after 07:00.
+    a = _ask("price", Pages({"energyprice.json": _set(**{"19": 0.01})}), hours=1, until="07:00")
+    assert a["run"]["start"] == "05:00"
+
+
+def test_a_run_until_a_time_with_fewer_hours_priced_says_how_many():
+    # At 23:10 slots 00 to 07 end by 07:00; with 02 unpriced, 03 to 07 are the longest run:
+    # 02:00 to 07:00, at 1.064, 1.0155, 0.9981, 0.9723 and 0.9258, 0.9951 on average.
+    a = _ask(
+        "price",
+        Pages({"energyprice.json": _set(**{"02": None})}, read_at=LATE),
+        now=LATE + 1,
+        hours=6,
+        until="07:00",
+    )
+    assert a["run"] == {"hours": 5, "start": "02:00", "end": "07:00", "price": 0.9951}
+    assert a["say"] == (
+        "Only 5 hours in a row are priced before 07:00. "
+        "The cheapest 5 hours in a row start at 02:00 and end at 07:00, at 1.00 kr per kWh."
+    )
+
+
+def test_a_run_until_a_time_before_tomorrow_s_prices_are_out_says_so():
+    a = _ask(
+        "price", Pages({"energyprice.json": _after(1)}, read_at=LATE), now=LATE + 1, hours=4, until="07:00"
+    )
+    assert a["run"] == {"hours": 1, "start": "23:00", "end": "00:00", "price": 1.0165}
+    assert a["say"] == (
+        "Only 1 hour is priced before 07:00. "
+        "The cheapest hour starts at 23:00 and ends at 00:00, at 1.02 kr per kWh. "
+        "Tomorrow's prices aren't out yet, so this ends by midnight."
+    )
+
+
+def test_a_run_until_this_very_minute_ends_by_it_tomorrow():
+    # Read at 14:10:46, "14:10" is tomorrow's 14:10: the cheapest hour by then is 13:00.
+    a = _ask("price", hours=1, until="14:10")
+    assert a["run"]["start"] == "13:00"
+
+
+def test_a_run_until_a_time_past_the_end_of_the_price_page_says_how_many_hours_are_priced():
+    # A page that stops after 03:00: slots 00 to 04, 23:00 to 04:00, 1.0234 on average.
+    def short(body):
+        for k in [k for k in body if k.isdigit() and int(k) >= 5]:
+            del body[k]
+
+    a = _ask("price", Pages({"energyprice.json": short}, read_at=LATE), now=LATE + 1, hours=6, until="07:00")
+    assert a["run"] == {"hours": 5, "start": "23:00", "end": "04:00", "price": 1.0234}
+    assert a["say"].startswith("Only 5 hours in a row are priced before 07:00. ")
+
+
+def test_a_run_until_a_time_the_clocks_skip_is_refused():
+    # On 29 March the clocks go from 02:00 straight to 03:00, so there is no 02:30.
+    a = _ask("price", Pages(read_at=SPRING), now=SPRING + 1, hours=1, until="02:30")
+    assert a["success"] is False
+    assert a["say"] == "There is no 02:30 tonight, since the clocks go forward. Ask for another time."
+
+
+def test_a_run_until_a_time_within_this_hour_has_no_whole_hour():
+    a = _ask("price", hours=1, until="14:30")
+    assert a["success"] is True
+    assert a["run"] is None
+    assert a["say"] == "No whole hour is left before 14:30."
+
+
+def test_a_run_until_a_time_on_the_night_the_clocks_go_back_is_counted_in_real_hours():
+    # From 00:30 on 25 October, 00:00 to 03:00 is four real hours, since 02:00 comes twice.
+    a = _ask("price", Pages(read_at=AUTUMN), now=AUTUMN + 1, hours=4, until="03:00")
+    assert (a["run"]["hours"], a["run"]["start"], a["run"]["end"]) == (4, "00:00", "03:00")
+
+
+@pytest.mark.parametrize("until", ["7", "25:00", "07:60", "seven", "7:00"])
+def test_a_run_until_a_time_needs_the_time_as_hh_mm(until):
+    a = _ask("price", hours=2, until=until)
+    assert a["success"] is False
+    assert a["say"] == f"I need the time to end by as HH:MM, like 07:00, not {until}."
+
+
+def test_a_run_until_a_time_needs_how_many_hours():
+    a = _ask("price", until="07:00")
+    assert a["success"] is False
+    assert a["say"] == "Say how many hours in a row too, 1 to 6, with the time to end by."
+
+
 # ams_capacity
 
 

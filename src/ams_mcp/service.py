@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import re
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -32,6 +33,8 @@ NEXT_HOURS = 12
 SPOKEN_HOURS = 3
 #: How long a run of hours in a row the price answer finds: a dishwasher, a wash, a charge.
 RUN_HOURS = range(1, 7)
+#: A time to end a run by: two-digit hour and minute, as "07:00".
+UNTIL = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 
 #: Every failure says what is wrong and what to do next; {where} is the reader's address.
 UNREACHABLE = (
@@ -81,14 +84,15 @@ class AmsService:
         """Energy in and out this hour, today and this month."""
         return await self._answer(self._energy)
 
-    async def price(self, hours: int | None = None) -> dict[str, Any]:
-        """The price now, the next hours, and the cheapest hours left today; or the cheapest run of hours."""
-        if hours is not None and hours not in RUN_HOURS:
-            return {
-                "success": False,
-                "say": f"I can find 1 to 6 hours in a row, not {hours}. Ask for 1 to 6 hours.",
-            }
-        return await self._answer(lambda: self._price(hours))
+    async def price(self, hours: int | None = None, until: str | None = None) -> dict[str, Any]:
+        """The price now, the next hours, and the cheapest hours left today; or the cheapest run of hours.
+
+        With `until`, the run may start any hour from now on, and ends by that time.
+        """
+        refused = _run_refused(hours, until)
+        if refused:
+            return {"success": False, "say": refused}
+        return await self._answer(lambda: self._price(hours, until))
 
     async def capacity(self) -> dict[str, Any]:
         """The capacity step, the month's top hours, and how far this hour is from the next step."""
@@ -223,7 +227,9 @@ class AmsService:
         }
         return answer, [data]
 
-    async def _price(self, hours: int | None = None) -> tuple[dict[str, Any], list[Page]]:
+    async def _price(
+        self, hours: int | None = None, until: str | None = None
+    ) -> tuple[dict[str, Any], list[Page]]:
         page = await self._source.page("energyprice.json")
         found = pages.prices(page.body)
         if found.by_hour[0] is None:
@@ -253,9 +259,31 @@ class AmsService:
             "cheapest_today": cheapest,
             "currency": found.currency,
         }
-        if hours is not None:
-            answer["run"], answer["say"] = self._run(found.by_hour, start, hours, kr)
-        return answer, [page]
+        if hours is None:
+            return answer, [page]
+        return self._with_run(answer, found.by_hour, start, (hours, until, kr), page.read_at), [page]
+
+    def _with_run(
+        self,
+        answer: dict[str, Any],
+        by_hour: tuple[float | None, ...],
+        start: dt.datetime,
+        asked: tuple[int, str | None, str],
+        read_at: float,
+    ) -> dict[str, Any]:
+        """The price answer with the run asked for, or a refusal when `until` is a time the clocks skip."""
+        hours, until, kr = asked
+        if until is None:
+            answer["run"], answer["say"] = self._run(by_hour, start, hours, kr)
+            return answer
+        deadline = self._deadline(self._local(read_at), until)
+        if deadline is None:
+            return {
+                "success": False,
+                "say": f"There is no {until} tonight, since the clocks go forward. Ask for another time.",
+            }
+        answer["run"], answer["say"] = self._run_until(by_hour, start, (hours, kr), deadline, until)
+        return answer
 
     def _run(
         self, by_hour: tuple[float | None, ...], start: dt.datetime, hours: int, kr: str
@@ -271,11 +299,57 @@ class AmsService:
         if not fits:
             lead = "Tomorrow's prices aren't out yet, and n" if not_out else "N"
             return None, f"{lead}o {_run_of(hours)} {'is' if hours == 1 else 'are'} known from now."
+        run, cost = self._cheapest(by_hour, start, fits, (hours, kr))
+        return run, _run_said(run, cost, not_out=not_out)
+
+    def _run_until(
+        self,
+        by_hour: tuple[float | None, ...],
+        start: dt.datetime,
+        asked: tuple[int, str],
+        deadline: dt.datetime,
+        until: str,
+    ) -> tuple[dict[str, Any] | None, str]:
+        """The cheapest run of `asked` hours that ends by `deadline`, from any hour on; and its sentence.
+
+        With fewer hours in a row priced before then, it is the longest run there is, and says so.
+        """
+        hours, kr = asked
+        ends = [self._later(start, o).timestamp() for o in range(len(by_hour) + 1)]
+        # RULE: a run asked to end by a time never ends after it
+        last = max(o for o, end in enumerate(ends) if end <= deadline.timestamp())
+        if last == 0:
+            return None, f"No whole hour is left before {until}."
+        today = [o for o in range(len(by_hour)) if self._later(start, o).date() == start.date()]
+        not_out = last > len(today) and _not_out_yet(by_hour, tomorrow=len(today))
+        length = next(n for n in range(hours, 0, -1) if _runs(by_hour[:last], list(range(last)), n))
+        run, cost = self._cheapest(
+            by_hour, start, _runs(by_hour[:last], list(range(last)), length), (length, kr)
+        )
+        said = _run_said(run, cost, not_out=not_out)
+        if length < hours:
+            priced = "1 hour is" if length == 1 else f"{length} hours in a row are"
+            said = f"Only {priced} priced before {until}. {said}"
+        return run, said
+
+    def _cheapest(
+        self, by_hour: tuple[float | None, ...], start: dt.datetime, fits: list[int], asked: tuple[int, str]
+    ) -> tuple[dict[str, Any], str]:
+        """The cheapest of the runs starting at `fits`, the earliest on a tie, and its cost as said."""
+        hours, kr = asked
         best = min(fits, key=lambda o: (sum(by_hour[o : o + hours]), o))  # type: ignore[arg-type]
         price = round(sum(by_hour[best : best + hours]) / hours, 4)  # type: ignore[arg-type]
         begins, ends = (self._later(start, o).strftime("%H:%M") for o in (best, best + hours))
         run = {"hours": hours, "start": begins, "end": ends, "price": price}
-        return run, _run_said(run, f"{say.rounded(price, 2)} {kr} per kWh", not_out=not_out)
+        return run, f"{say.rounded(price, 2)} {kr} per kWh"
+
+    def _deadline(self, now: dt.datetime, until: str) -> dt.datetime | None:
+        """The next `until` after now, this very minute counting as gone; None if the clocks skip it."""
+        at = dt.time.fromisoformat(until)
+        day = now.date() + dt.timedelta(days=at <= now.time().replace(second=0, microsecond=0))
+        moment = dt.datetime.combine(day, at, tzinfo=self._tz)
+        real = moment.astimezone(dt.UTC).astimezone(self._tz)
+        return moment if real.time() == at else None
 
     async def _capacity(self) -> tuple[dict[str, Any], list[Page]]:
         data, tariff_page = await self._pages("data.json", "tariff.json")
@@ -410,6 +484,19 @@ def _needed(tariff: pages.Tariff, top: int, today: int) -> float:
     others = sorted((p.kwh for p in tariff.peaks if p.day != today), reverse=True)
     counted = min(top, len(others) + 1)
     return counted * tariff.step_kw - sum(others[: counted - 1])
+
+
+def _run_refused(hours: int | None, until: str | None) -> str | None:
+    """Why a run cannot be looked for as asked, or None when it can."""
+    if hours is not None and hours not in RUN_HOURS:
+        return f"I can find 1 to 6 hours in a row, not {hours}. Ask for 1 to 6 hours."
+    if until is None:
+        return None
+    if hours is None:
+        return "Say how many hours in a row too, 1 to 6, with the time to end by."
+    if not UNTIL.fullmatch(until):
+        return f"I need the time to end by as HH:MM, like 07:00, not {until}."
+    return None
 
 
 def _not_out_yet(by_hour: tuple[float | None, ...], *, tomorrow: int) -> bool:
