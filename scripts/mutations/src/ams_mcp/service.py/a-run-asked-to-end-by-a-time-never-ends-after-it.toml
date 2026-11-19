@@ -1,0 +1,5 @@
+[[rule]]
+name = "a run asked to end by a time never ends after it"
+file = "src/ams_mcp/service.py"
+find = '^\s*last = max\(o for o, end in enumerate\(ends\) if end <= deadline'
+replace = 'last = len(by_hour)'

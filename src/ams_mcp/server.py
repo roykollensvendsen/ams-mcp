@@ -102,11 +102,13 @@ def build_server(service: AmsService, *, simulated: bool = False) -> MCPServer[A
         description=(
             "Gives the price by hour.\nThe price now in kr per kWh, the next hours, and the cheapest "
             "hours left today. With hours (1 to 6), the cheapest run of that many hours in a row "
-            "that starts today, for a dishwasher or a wash."
+            'that starts today, for a dishwasher or a wash. With hours and until ("HH:MM", local time), '
+            "the cheapest run that ends by the next such time and may start after midnight, "
+            "for charging a car by morning."
         )
     )
-    async def ams_price(hours: int | None = None) -> dict[str, Any]:
-        return await service.price(hours)
+    async def ams_price(hours: int | None = None, until: str | None = None) -> dict[str, Any]:
+        return await service.price(hours, until)
 
     @guarded.tool(
         description=(
