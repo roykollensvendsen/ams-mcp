@@ -15,3 +15,4 @@ read whenever a decision record is written and when a phase ends.
 | Readings from MQTT as well as HTTP | The home broker runs and the reader publishes to it | Needs a broker and a change on the reader, both outside version 1 (ADR-AM-001) |
 | The cheapest hours tomorrow | The owner asks for tomorrow's prices by voice | The reader has them after about 13:00, but 'today' was what was asked |
 | Firmware other than v2.4.11 | The reader is upgraded | Each version can rename a key; the map is checked against one |
+| The temperature from the reader's sensors | The owner attaches a sensor to the reader | Its `temperature.json` listed no sensor when read on 19.11, so the tool would only ever say there is none |
