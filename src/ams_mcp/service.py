@@ -30,6 +30,8 @@ STALE_AFTER = 30.0
 NEXT_HOURS = 12
 #: How many hours ahead the price answer reads aloud, and how many cheap hours.
 SPOKEN_HOURS = 3
+#: How long a run of hours in a row the price answer finds: a dishwasher, a wash, a charge.
+RUN_HOURS = range(1, 7)
 
 #: Every failure says what is wrong and what to do next; {where} is the reader's address.
 UNREACHABLE = (
@@ -79,9 +81,14 @@ class AmsService:
         """Energy in and out this hour, today and this month."""
         return await self._answer(self._energy)
 
-    async def price(self) -> dict[str, Any]:
-        """The price now, the next hours, and the cheapest hours left today."""
-        return await self._answer(self._price)
+    async def price(self, hours: int | None = None) -> dict[str, Any]:
+        """The price now, the next hours, and the cheapest hours left today; or the cheapest run of hours."""
+        if hours is not None and hours not in RUN_HOURS:
+            return {
+                "success": False,
+                "say": f"I can find 1 to 6 hours in a row, not {hours}. Ask for 1 to 6 hours.",
+            }
+        return await self._answer(lambda: self._price(hours))
 
     async def capacity(self) -> dict[str, Any]:
         """The capacity step, the month's top hours, and how far this hour is from the next step."""
@@ -216,7 +223,7 @@ class AmsService:
         }
         return answer, [data]
 
-    async def _price(self) -> tuple[dict[str, Any], list[Page]]:
+    async def _price(self, hours: int | None = None) -> tuple[dict[str, Any], list[Page]]:
         page = await self._source.page("energyprice.json")
         found = pages.prices(page.body)
         if found.by_hour[0] is None:
@@ -239,14 +246,36 @@ class AmsService:
             words.append(f"The next {count} {say.listing(ahead)} {kr}.")
         spoken = [f"{c['hour']} at {say.rounded(c['price'], 2)}" for c in cheapest]
         words.append(f"Cheapest left today: {say.listing(spoken)} {kr}.")
-        answer = {
+        answer: dict[str, Any] = {
             "say": " ".join(words),
             "now": at(0),
             "next": upcoming,
             "cheapest_today": cheapest,
             "currency": found.currency,
         }
+        if hours is not None:
+            answer["run"], answer["say"] = self._run(found.by_hour, start, hours, kr)
         return answer, [page]
+
+    def _run(
+        self, by_hour: tuple[float | None, ...], start: dt.datetime, hours: int, kr: str
+    ) -> tuple[dict[str, Any] | None, str]:
+        """The cheapest `hours` in a row that start today, and the sentence that says it.
+
+        A run may go past midnight once tomorrow's prices are out; the page has them
+        from about 13:00. Slots are real hours from now, so a clock change is counted.
+        """
+        today = [o for o in range(len(by_hour)) if self._later(start, o).date() == start.date()]
+        not_out = _not_out_yet(by_hour, tomorrow=len(today))
+        fits = _runs(by_hour, today, hours)
+        if not fits:
+            lead = "Tomorrow's prices aren't out yet, and n" if not_out else "N"
+            return None, f"{lead}o {_run_of(hours)} {'is' if hours == 1 else 'are'} known from now."
+        best = min(fits, key=lambda o: (sum(by_hour[o : o + hours]), o))  # type: ignore[arg-type]
+        price = round(sum(by_hour[best : best + hours]) / hours, 4)  # type: ignore[arg-type]
+        begins, ends = (self._later(start, o).strftime("%H:%M") for o in (best, best + hours))
+        run = {"hours": hours, "start": begins, "end": ends, "price": price}
+        return run, _run_said(run, f"{say.rounded(price, 2)} {kr} per kWh", not_out=not_out)
 
     async def _capacity(self) -> tuple[dict[str, Any], list[Page]]:
         data, tariff_page = await self._pages("data.json", "tariff.json")
@@ -381,6 +410,34 @@ def _needed(tariff: pages.Tariff, top: int, today: int) -> float:
     others = sorted((p.kwh for p in tariff.peaks if p.day != today), reverse=True)
     counted = min(top, len(others) + 1)
     return counted * tariff.step_kw - sum(others[: counted - 1])
+
+
+def _not_out_yet(by_hour: tuple[float | None, ...], *, tomorrow: int) -> bool:
+    """Whether tomorrow's prices are not out yet: no price anywhere from its first slot on.
+
+    A gap with prices after it is just a gap, and says nothing about tomorrow.
+    """
+    return tomorrow < len(by_hour) and all(p is None for p in by_hour[tomorrow:])
+
+
+def _runs(by_hour: tuple[float | None, ...], starts: list[int], hours: int) -> list[int]:
+    """The slots among `starts` from which `hours` slots in a row all have a price."""
+    # RULE: a run of hours uses only hours that all have a price
+    return [o for o in starts if None not in by_hour[o : o + hours] and o + hours <= len(by_hour)]
+
+
+def _run_of(hours: int) -> str:
+    return "hour" if hours == 1 else f"{hours} hours in a row"
+
+
+def _run_said(run: dict[str, Any], cost: str, *, not_out: bool) -> str:
+    """The sentence for a run: when it starts and ends, what it costs, and why it ends by midnight."""
+    starts, ends = ("starts", "ends") if run["hours"] == 1 else ("start", "end")
+    late = " Tomorrow's prices aren't out yet, so this ends by midnight." if not_out else ""
+    return (
+        f"The cheapest {_run_of(run['hours'])} {starts} at {run['start']} and {ends} at {run['end']}, "
+        f"at {cost}.{late}"
+    )
 
 
 def _unreachable(error: ReaderError) -> str:

@@ -196,10 +196,27 @@ def tariff(page: dict[str, Any]) -> Tariff:
     )
 
 
+#: How many hours energyprice.json gives in v2.4.11: this one and the 35 after it.
+PRICE_HOURS = 36
+#: Keys a price page in steps other than an hour might carry; v2.4.11 has none of them.
+PRICE_STEP_KEYS = ("resolution", "step", "interval", "minutes")
+
+
+def _by_the_hour(page: dict[str, Any]) -> bool:
+    """Whether the page counts in hours, as v2.4.11's does, rather than in smaller steps."""
+    slots = [int(k) for k in page if k.isascii() and k.isdigit()]
+    return max(slots, default=0) < PRICE_HOURS and not any(k in page for k in PRICE_STEP_KEYS)
+
+
 def prices(page: dict[str, Any]) -> Prices:
     """energyprice.json, named: "00" is this hour, "01" the next, up to "35"."""
+    # A page in 15-minute steps read as hours would put every price at the wrong time.
+    # RULE: a price page with more than 36 hours or a step of its own is refused
+    if not _by_the_hour(page):
+        msg = "the price page is not counted in hours, as firmware v2.4.11 counts it"
+        raise PageError(msg)
     by_hour: list[float | None] = []
-    for offset in range(36):
+    for offset in range(PRICE_HOURS):
         value = page.get(f"{offset:02d}")
         by_hour.append(float(value) if isinstance(value, int | float) else None)
     return Prices(str(page.get("currency") or ""), tuple(by_hour))

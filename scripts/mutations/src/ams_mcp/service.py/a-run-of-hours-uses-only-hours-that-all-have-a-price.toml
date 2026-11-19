@@ -1,0 +1,5 @@
+[[rule]]
+name = "a run of hours uses only hours that all have a price"
+file = "src/ams_mcp/service.py"
+find = '^\s*return \[o for o in starts if None not in by_hour'
+replace = 'return [o for o in starts if o + hours <= len(by_hour)]'
