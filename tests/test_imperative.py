@@ -83,7 +83,7 @@ def test_the_range_is_read_from_git(tmp_path):
     that reads the repository it happens to be running in is a test whose answer
     depends on how it was started.
     """
-    run = functools.partial(subprocess.run, cwd=tmp_path, check=True, capture_output=True)
+    run = functools.partial(subprocess.run, cwd=tmp_path, check=True, capture_output=True, timeout=WITHIN)
     run(["git", "init", "-q", "-b", "main"])
     run(["git", "config", "user.email", "test@example.com"])
     run(["git", "config", "user.name", "A Test"])

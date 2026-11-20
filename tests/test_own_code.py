@@ -183,7 +183,7 @@ def test_a_stopped_uv_run_step_hears_ctrl_c_once(tmp_path):
     finally:
         if ratchet.poll() is None:
             ratchet.kill()
-            ratchet.wait()
+            ratchet.wait(timeout=WITHIN)
         _end_the_step(tmp_path / "step")
 
 
