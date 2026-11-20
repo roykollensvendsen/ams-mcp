@@ -1,0 +1,5 @@
+[[rule]]
+name = "a sweep takes only folders named as runs"
+file = "scripts/mutate.py"
+find = '^\s*if not left\.name\.startswith\("run-"\):$'
+replace = 'if False:'

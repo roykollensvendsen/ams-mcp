@@ -471,6 +471,18 @@ def test_a_link_in_the_runs_folder_is_never_followed(tmp_path, monkeypatch):
     assert (outside / "kept").stat().st_mode & 0o777 == 0o500
 
 
+def test_a_sweep_takes_only_folders_named_as_runs(tmp_path, monkeypatch):
+    """A folder of ours that no run made, by its name, is left where it is."""
+    project = _project(tmp_path, LEAKY_TEST)
+    mutate = _load(project / "scripts/mutate.py", "mutate_named", tmp_path / "tmp", monkeypatch)
+    mutate.MUTATE_TMP.mkdir(mode=0o700)
+    (mutate.MUTATE_TMP / "run-left").mkdir()
+    (mutate.MUTATE_TMP / "notes").mkdir()
+    mutate.sweep()
+    assert not (mutate.MUTATE_TMP / "run-left").exists()
+    assert (mutate.MUTATE_TMP / "notes").is_dir()
+
+
 def test_a_second_mutation_run_in_one_checkout_stops_at_once(tmp_path, monkeypatch, capsys):
     project = _project(tmp_path, LEAKY_TEST)
     mutate = _load(project / "scripts/mutate.py", "mutate_second", tmp_path / "tmp", monkeypatch)
