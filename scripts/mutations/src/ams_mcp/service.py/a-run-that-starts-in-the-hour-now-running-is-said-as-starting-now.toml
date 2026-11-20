@@ -1,0 +1,5 @@
+[[rule]]
+name = "a run that starts in the hour now running is said as starting now"
+file = "src/ams_mcp/service.py"
+find = '^\s*when = "now" if best == 0 else f"at \{begins\}"$'
+replace = 'when = f"at {begins}"'

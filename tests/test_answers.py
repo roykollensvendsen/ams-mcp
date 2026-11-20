@@ -168,6 +168,20 @@ def test_a_run_of_hours_names_its_start_its_end_and_its_average():
     assert a["say"] == "The cheapest 3 hours in a row start at 23:00 and end at 02:00, at 0.87 kr per kWh."
 
 
+def test_a_run_that_starts_in_the_hour_now_running_is_said_as_starting_now():
+    # At 23:10 the run from 23:00 has already begun, so "at 23:00" would be in the past.
+    a = _ask("price", Pages(read_at=LATE), now=LATE + 1, hours=2)
+    assert a["run"]["start"] == "23:00"
+    assert a["say"].startswith("The cheapest 2 hours in a row start now and end at 01:00, at ")
+
+
+def test_a_run_until_a_time_with_no_price_now_says_the_reader_has_no_prices():
+    # Every run is looked for only once the hour now running has a price.
+    a = _ask("price", Pages({"energyprice.json": _set(**{"00": None})}), hours=2, until="07:00")
+    assert a["success"] is False
+    assert "has no prices just now" in a["say"]
+
+
 def test_a_run_of_hours_uses_only_hours_that_all_have_a_price():
     # Slot 10 has none, so neither 23:00 (09-11) nor 22:00 (08-10) can be the run.
     # Next is 21:00 (07-09): 0.9258, 0.8852 and 0.8741, 0.8950 on average.
@@ -267,7 +281,7 @@ def test_a_run_until_a_time_before_tomorrow_s_prices_are_out_says_so():
     assert a["run"] == {"hours": 1, "start": "23:00", "end": "00:00", "price": 1.0165}
     assert a["say"] == (
         "Only 1 hour is priced before 07:00. "
-        "The cheapest hour starts at 23:00 and ends at 00:00, at 1.02 kr per kWh. "
+        "The cheapest hour starts now and ends at 00:00, at 1.02 kr per kWh. "
         "Tomorrow's prices aren't out yet, so this ends by midnight."
     )
 

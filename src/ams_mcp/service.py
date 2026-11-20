@@ -302,8 +302,8 @@ class AmsService:
         if not fits:
             lead = "Tomorrow's prices aren't out yet, and n" if not_out else "N"
             return None, f"{lead}o {_run_of(hours)} {'is' if hours == 1 else 'are'} known from now."
-        run, cost = self._cheapest(by_hour, start, fits, (hours, kr))
-        return run, _run_said(run, cost, not_out=not_out)
+        run, said = self._cheapest(by_hour, start, fits, (hours, kr))
+        return run, _run_said(run, said, not_out=not_out)
 
     def _run_until(
         self,
@@ -325,11 +325,13 @@ class AmsService:
             return None, f"No whole hour is left before {until}."
         today = [o for o in range(len(by_hour)) if self._later(start, o).date() == start.date()]
         not_out = last > len(today) and _not_out_yet(by_hour, tomorrow=len(today))
+        # Slot 0 always has a price here (_price answers NO_PRICES first) and ends by the deadline,
+        # so a run of one hour always fits.
         length = next(n for n in range(hours, 0, -1) if _runs(by_hour[:last], list(range(last)), n))
-        run, cost = self._cheapest(
+        run, spoken = self._cheapest(
             by_hour, start, _runs(by_hour[:last], list(range(last)), length), (length, kr)
         )
-        said = _run_said(run, cost, not_out=not_out)
+        said = _run_said(run, spoken, not_out=not_out)
         if length < hours:
             priced = "1 hour is" if length == 1 else f"{length} hours in a row are"
             said = f"Only {priced} priced before {until}. {said}"
@@ -337,14 +339,16 @@ class AmsService:
 
     def _cheapest(
         self, by_hour: tuple[float | None, ...], start: dt.datetime, fits: list[int], asked: tuple[int, str]
-    ) -> tuple[dict[str, Any], str]:
-        """The cheapest of the runs starting at `fits`, the earliest on a tie, and its cost as said."""
+    ) -> tuple[dict[str, Any], tuple[str, str]]:
+        """The cheapest run from one of `fits`, the earliest on a tie; and when it starts and its cost."""
         hours, kr = asked
         best = min(fits, key=lambda o: (sum(by_hour[o : o + hours]), o))  # type: ignore[arg-type]
         price = round(sum(by_hour[best : best + hours]) / hours, 4)  # type: ignore[arg-type]
         begins, ends = (self._later(start, o).strftime("%H:%M") for o in (best, best + hours))
         run = {"hours": hours, "start": begins, "end": ends, "price": price}
-        return run, f"{say.rounded(price, 2)} {kr} per kWh"
+        # RULE: a run that starts in the hour now running is said as starting now
+        when = "now" if best == 0 else f"at {begins}"
+        return run, (when, f"{say.rounded(price, 2)} {kr} per kWh")
 
     def _deadline(self, now: dt.datetime, until: str) -> dt.datetime | None:
         """The next `until` after now, this very minute counting as gone; None if the clocks skip it."""
@@ -552,13 +556,13 @@ def _run_of(hours: int) -> str:
     return "hour" if hours == 1 else f"{hours} hours in a row"
 
 
-def _run_said(run: dict[str, Any], cost: str, *, not_out: bool) -> str:
+def _run_said(run: dict[str, Any], spoken: tuple[str, str], *, not_out: bool) -> str:
     """The sentence for a run: when it starts and ends, what it costs, and why it ends by midnight."""
+    when, cost = spoken
     starts, ends = ("starts", "ends") if run["hours"] == 1 else ("start", "end")
     late = " Tomorrow's prices aren't out yet, so this ends by midnight." if not_out else ""
     return (
-        f"The cheapest {_run_of(run['hours'])} {starts} at {run['start']} and {ends} at {run['end']}, "
-        f"at {cost}.{late}"
+        f"The cheapest {_run_of(run['hours'])} {starts} {when} and {ends} at {run['end']}, at {cost}.{late}"
     )
 
 
