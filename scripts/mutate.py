@@ -296,6 +296,10 @@ def sweep() -> None:
     _private_folder(MUTATE_TMP)
     # RULE: a killed run's temporary files are swept at the next start
     for left in MUTATE_TMP.iterdir() if MUTATE_TMP.is_dir() else []:
+        # Only what a run makes, by its name: anything else here is not this script's to take.
+        # RULE: a sweep takes only folders named as runs
+        if not left.name.startswith("run-"):
+            continue
         # RULE: a link in the runs' folder is never followed
         if not _ours(left):
             continue
