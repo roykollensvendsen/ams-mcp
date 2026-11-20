@@ -278,7 +278,7 @@ def test_a_ratchet_folder_that_is_not_ours_alone_is_refused(tmp_path, monkeypatc
     for mode in (0o777, 0o755):  # writable by others, and only readable by them
         ratchet.RATCHET_TMP.chmod(mode)
         with (
-            pytest.raises(SystemExit, match=r"not a folder of this user's alone.*rm -rf"),
+            pytest.raises(SystemExit, match=r"not a folder of this user's alone.*chmod 700 .*rm -rf"),
             ratchet.run_folder(),
         ):
             pass
@@ -311,7 +311,7 @@ def test_a_shared_folder_for_runs_that_is_not_ours_alone_is_refused(tmp_path, mo
     mutate.MUTATE_TMP.mkdir()
     for mode in (0o777, 0o755):  # writable by others, and only readable by them
         mutate.MUTATE_TMP.chmod(mode)
-        with pytest.raises(SystemExit, match=r"not a folder of this user's alone.*rm -rf"):
+        with pytest.raises(SystemExit, match=r"not a folder of this user's alone.*chmod 700 .*rm -rf"):
             mutate.run_suite()
 
 
