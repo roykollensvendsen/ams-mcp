@@ -173,7 +173,8 @@ def _private_folder(path: pathlib.Path) -> None:
     """
     refused = (
         f"{path} is not a folder of this user's alone: a link, someone else's, or open to"
-        f" others. Look at what is in it, then remove it and run again: rm -rf {path}"
+        f" others. If it is yours and nobody else can write in it, make it private: chmod 700 {path}."
+        f" Otherwise look at what is in it, then remove it and run again: rm -rf {path}"
     )
     with contextlib.suppress(FileExistsError):
         path.mkdir(mode=PRIVATE)
