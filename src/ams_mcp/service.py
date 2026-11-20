@@ -248,7 +248,7 @@ class AmsService:
         upcoming = [at(o) for o in known if 0 < o <= NEXT_HOURS]
         today = [o for o in known if self._later(start, o).date() == start.date()]
         cheapest = [at(o) for o in sorted(today, key=lambda o: (found.by_hour[o], o))[:SPOKEN_HOURS]]
-        words = [f"{say.rounded(found.by_hour[0], 2)} {kr} per kWh now."]
+        words = [f"Now {_per_kwh(found.by_hour[0], kr)}."]
         if upcoming:
             ahead = [say.rounded(h["price"], 2) for h in upcoming[:SPOKEN_HOURS]]
             count = {1: "hour", 2: "two hours", 3: "three hours"}[len(ahead)]
@@ -348,7 +348,7 @@ class AmsService:
         run = {"hours": hours, "start": begins, "end": ends, "price": price}
         # RULE: a run that starts in the hour now running is said as starting now
         when = "now" if best == 0 else f"at {begins}"
-        return run, (when, f"{say.rounded(price, 2)} {kr} per kWh")
+        return run, (when, _per_kwh(price, kr))
 
     def _deadline(self, now: dt.datetime, until: str) -> dt.datetime | None:
         """The next `until` after now, this very minute counting as gone; None if the clocks skip it."""
@@ -554,6 +554,12 @@ def _runs(by_hour: tuple[float | None, ...], starts: list[int], hours: int) -> l
 
 def _run_of(hours: int) -> str:
     return "hour" if hours == 1 else f"{hours} hours in a row"
+
+
+def _per_kwh(price: float, kr: str) -> str:
+    """A price as said: what the reader adds to the spot price is set on the reader, not known here."""
+    # RULE: a spoken price says it is the reader's own and leaves out grid rent
+    return f"{say.rounded(price, 2)} {kr} per kWh, as the meter reader prices it; grid rent not included"
 
 
 def _run_said(run: dict[str, Any], spoken: tuple[str, str], *, not_out: bool) -> str:

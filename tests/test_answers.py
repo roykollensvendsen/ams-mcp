@@ -120,11 +120,15 @@ def test_energy_sent_out_is_said_only_when_there_is_some():
 
 # ams_price
 
+#: What every spoken price says it is, after "kr per kWh".
+AS_PRICED = ", as the meter reader prices it; grid rent not included"
+
 
 def test_price_says_now_the_next_hours_and_the_cheapest_left_today():
     a = _ask("price")
     assert a["say"] == (
-        "1.02 kr per kWh now. The next three hours 1.02, 1.00 and 1.06 kr. "
+        f"Now 1.02 kr per kWh{AS_PRICED}. "
+        "The next three hours 1.02, 1.00 and 1.06 kr. "
         "Cheapest left today: 23:00 at 0.87, 22:00 at 0.89 and 21:00 at 0.93 kr."
     )
     assert a["now"] == {"hour": "14:00", "price": 1.0165}
@@ -132,6 +136,15 @@ def test_price_says_now_the_next_hours_and_the_cheapest_left_today():
     assert len(a["next"]) == service.NEXT_HOURS
     assert [c["hour"] for c in a["cheapest_today"]] == ["23:00", "22:00", "21:00"]
     assert a["currency"] == "NOK"
+
+
+@pytest.mark.parametrize(
+    "asked", [{}, {"hours": 3}, {"hours": 4, "until": "07:00"}], ids=["now", "a run", "a run until"]
+)
+def test_a_spoken_price_says_it_is_the_reader_s_own_and_leaves_out_grid_rent(asked):
+    # What the reader adds to the spot price is set on the reader, and grid rent is billed apart.
+    a = _ask("price", **asked)
+    assert f"kr per kWh{AS_PRICED}." in a["say"]
 
 
 def test_a_reader_with_no_prices_says_so():
@@ -165,7 +178,10 @@ def test_a_run_of_hours_names_its_start_its_end_and_its_average():
     # Slots 09 to 11 are 23:00 to 02:00: 0.8741, 0.8744 and 0.8687, 0.8724 on average.
     a = _ask("price", hours=3)
     assert a["run"] == {"hours": 3, "start": "23:00", "end": "02:00", "price": 0.8724}
-    assert a["say"] == "The cheapest 3 hours in a row start at 23:00 and end at 02:00, at 0.87 kr per kWh."
+    assert (
+        a["say"]
+        == f"The cheapest 3 hours in a row start at 23:00 and end at 02:00, at 0.87 kr per kWh{AS_PRICED}."
+    )
 
 
 def test_a_run_that_starts_in_the_hour_now_running_is_said_as_starting_now():
@@ -242,7 +258,10 @@ def test_a_run_until_a_time_may_start_after_midnight():
     # in a row are 12 to 15, 02:00 to 06:00: 0.8633, 0.862, 0.8607 and 0.8605, 0.8616 on average.
     a = _ask("price", hours=4, until="07:00")
     assert a["run"] == {"hours": 4, "start": "02:00", "end": "06:00", "price": 0.8616}
-    assert a["say"] == "The cheapest 4 hours in a row start at 02:00 and end at 06:00, at 0.86 kr per kWh."
+    assert (
+        a["say"]
+        == f"The cheapest 4 hours in a row start at 02:00 and end at 06:00, at 0.86 kr per kWh{AS_PRICED}."
+    )
 
 
 def test_a_run_until_a_time_already_gone_today_ends_by_it_tomorrow():
@@ -270,7 +289,7 @@ def test_a_run_until_a_time_with_fewer_hours_priced_says_how_many():
     assert a["run"] == {"hours": 5, "start": "02:00", "end": "07:00", "price": 0.9951}
     assert a["say"] == (
         "Only 5 hours in a row are priced before 07:00. "
-        "The cheapest 5 hours in a row start at 02:00 and end at 07:00, at 1.00 kr per kWh."
+        f"The cheapest 5 hours in a row start at 02:00 and end at 07:00, at 1.00 kr per kWh{AS_PRICED}."
     )
 
 
@@ -281,7 +300,7 @@ def test_a_run_until_a_time_before_tomorrow_s_prices_are_out_says_so():
     assert a["run"] == {"hours": 1, "start": "23:00", "end": "00:00", "price": 1.0165}
     assert a["say"] == (
         "Only 1 hour is priced before 07:00. "
-        "The cheapest hour starts now and ends at 00:00, at 1.02 kr per kWh. "
+        f"The cheapest hour starts now and ends at 00:00, at 1.02 kr per kWh{AS_PRICED}. "
         "Tomorrow's prices aren't out yet, so this ends by midnight."
     )
 

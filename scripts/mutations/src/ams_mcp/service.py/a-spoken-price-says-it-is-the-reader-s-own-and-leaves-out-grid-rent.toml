@@ -1,0 +1,5 @@
+[[rule]]
+name = "a spoken price says it is the reader's own and leaves out grid rent"
+file = "src/ams_mcp/service.py"
+find = '^\s*return f"\{say\.rounded\(price, 2\)\} \{kr\} per kWh, as the meter reader prices it; grid rent not included"$'
+replace = 'return f"{say.rounded(price, 2)} {kr} per kWh"'
